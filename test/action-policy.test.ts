@@ -21,11 +21,12 @@ const principal: Principal = {
 function context(
   sourceSurface: ActionContext['sourceSurface'],
   operationId: string,
-  requirement: ActionRequirement
+  requirement: ActionRequirement,
+  owner: Principal = principal
 ): ActionContext {
   const intent = actionIntentFor(sourceSurface, operationId, requirement);
   return {
-    principal,
+    principal: owner,
     sourceSurface,
     actionClass: intent.actionClass,
     target: { kind: intent.target },
@@ -115,6 +116,43 @@ describe('central action policy', () => {
     expect(evaluateActionPolicy(context('desktop', 'get_window_state', observe), {
       capabilities: { ...DEFAULT_CAPABILITIES, screen: false }, readOnly: true
     }, observe).reasonCode).toBe('capability_disabled');
+  });
+
+  it('requires an exact Principal for sensitive Desktop actions while leaving ordinary observation unchanged', () => {
+    const unknown: Principal = {
+      conversationId: null,
+      localSessionId: null,
+      requestId: 'request-without-page-proof',
+      runId: null,
+      agentId: null
+    };
+    const cases = [
+      ['launch_app', 'control'],
+      ['press_key', 'control'],
+      ['write_clipboard', 'clipboardWrite'],
+      ['read_clipboard', 'clipboardRead']
+    ] as const;
+
+    for (const [operationId, capability] of cases) {
+      const requirement = { kind: 'capability', capability } as const;
+      const action = context('desktop', operationId, requirement, unknown);
+      const denied = evaluateActionPolicy(action, {
+        capabilities: { ...DEFAULT_CAPABILITIES, [capability]: true },
+        readOnly: false
+      }, requirement);
+      expect(denied).toMatchObject({ effect: 'deny', reasonCode: 'caller_identity_required' });
+
+      expect(evaluateActionPolicy(context('desktop', operationId, requirement), {
+        capabilities: { ...DEFAULT_CAPABILITIES, [capability]: true },
+        readOnly: false
+      }, requirement)).toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
+    }
+
+    const observe = { kind: 'capability', capability: 'screen' } as const;
+    expect(evaluateActionPolicy(context('desktop', 'get_window_state', observe, unknown), {
+      capabilities: { ...DEFAULT_CAPABILITIES, screen: true },
+      readOnly: false
+    }, observe)).toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
   });
 
   it('is the live gate used by the registered Core exec_command adapter', async () => {

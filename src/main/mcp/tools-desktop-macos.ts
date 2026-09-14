@@ -36,6 +36,7 @@ import { noteCount, noteDetail } from './call-context.js';
 import {
   cropArg,
   fail,
+  failIdentity,
   guard,
   imageCoordinateArg,
   mouseButtonArg,
@@ -464,11 +465,19 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
           // need "control", the clipboard steps need their own, and one blanket refusal
           // would hide which of them the user actually has to switch on.
           const needsControl = actions.some((a) => a.type !== 'wait' && !a.type.endsWith('_clipboard'));
-          if (needsControl && reg.authorize('computer:desktop', { kind: 'capability', capability: 'control' }).effect === 'deny') {
-            return fail(
-              'TOOL_DISABLED: mouse and keyboard control is disabled by the current Octo Chat permissions. ' +
-                'Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
-            );
+          if (needsControl) {
+            const decision = reg.authorize('computer:desktop', { kind: 'capability', capability: 'control' });
+            if (decision.effect === 'deny') {
+              if (decision.reasonCode === 'caller_identity_required') {
+                return failIdentity(
+                  'CALLER_IDENTITY_REQUIRED: Desktop input requires exact companion request/chat/session identity. Retry after the companion reconnects; no input ran.'
+                );
+              }
+              return fail(
+                'TOOL_DISABLED: mouse and keyboard control is disabled by the current Octo Chat permissions. ' +
+                  'Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
+              );
+            }
           }
           const parsed: Action[] = [];
           for (const a of actions) {
@@ -508,13 +517,25 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
                 // Gated here rather than by leaving the variant out of the schema: the
                 // schema is cached by ChatGPT, and a tool that quietly changes shape when
                 // a checkbox moves is worse than one that says plainly it is switched off.
-                if (reg.authorize('computer:read_clipboard', { kind: 'capability', capability: 'clipboardRead' }).effect === 'deny') {
+                const readClipboardDecision = reg.authorize('computer:read_clipboard', { kind: 'capability', capability: 'clipboardRead' });
+                if (readClipboardDecision.effect === 'deny') {
+                  if (readClipboardDecision.reasonCode === 'caller_identity_required') {
+                    return failIdentity(
+                      'CALLER_IDENTITY_REQUIRED: reading the clipboard requires exact companion request/chat/session identity. Retry after the companion reconnects; no clipboard data was read.'
+                    );
+                  }
                   return fail('TOOL_DISABLED: read_clipboard needs the Read the clipboard permission.');
                 }
                 parsed.push({ type: 'read_clipboard' });
                 break;
               case 'write_clipboard':
-                if (reg.authorize('computer:write_clipboard', { kind: 'capability', capability: 'clipboardWrite' }).effect === 'deny') {
+                const writeClipboardDecision = reg.authorize('computer:write_clipboard', { kind: 'capability', capability: 'clipboardWrite' });
+                if (writeClipboardDecision.effect === 'deny') {
+                  if (writeClipboardDecision.reasonCode === 'caller_identity_required') {
+                    return failIdentity(
+                      'CALLER_IDENTITY_REQUIRED: replacing the clipboard requires exact companion request/chat/session identity. Retry after the companion reconnects; no clipboard data was changed.'
+                    );
+                  }
                   return fail('TOOL_DISABLED: write_clipboard needs the Replace clipboard text permission.');
                 }
                 parsed.push({ type: 'write_clipboard', text: a.text });

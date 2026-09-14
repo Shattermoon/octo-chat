@@ -256,7 +256,7 @@
   "Requires the Chrome extension to be loaded and connected. This sets the most worker chats one run may open.": "需要加载并连接 Chrome 扩展。此设置限制一次运行可打开的子智能体聊天数量。",
   "max": "上限",
   "Allow unattributed calls": "允许未归属的调用",
-  "Allow tools, including computer use, file editing and JavaScript, without chat attribution. Sub-agents and other chat-owned actions still need an identified chat. Activity appears as Unattributed.": "允许在未确定聊天归属时使用工具，包括电脑操作、文件编辑和 JavaScript。子代理及其他依赖聊天归属的操作仍需识别聊天。活动显示为“未归属”。",
+  "Allow self-contained tools such as file editing and JavaScript without chat attribution. Desktop mutation, app launch, clipboard access, sub-agents and other chat-owned actions still need an identified chat. Activity appears as Unattributed.": "允许在未确定聊天归属时使用可独立完成的工具，例如文件编辑和 JavaScript。桌面修改、应用启动、剪贴板访问、子代理及其他依赖聊天归属的操作仍需识别聊天。活动显示为“未归属”。",
   "Recover other chats’ tabs": "恢复其他聊天的标签页",
   "Restore missing or unresponsive work chats. Goal and Loop chats recover automatically.": "恢复缺失或无响应的工作聊天。目标和循环聊天会自动恢复。",
   "Clear swarm": "清除智能体组",

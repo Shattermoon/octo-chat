@@ -1,6 +1,6 @@
 import { offerToolInput, acknowledgeToolInput, TOOL_INPUT_HEADER } from '../session/input.js';
 import { pluginManager } from '../plugins/manager.js';
-import { WINDOWS_COMPUTER_STATE_INPUT_METHODS } from '../../shared/windows-computer.js';
+import { WINDOWS_COMPUTER_INPUT_METHODS, WINDOWS_COMPUTER_STATE_INPUT_METHODS } from '../../shared/windows-computer.js';
 /**
  * The machinery every model-facing tool sits on, independent of which surface it lives on.
  *
@@ -347,6 +347,17 @@ function setCallerConversation(context: CallContext, conversationId: string | nu
   context.caller.sessionId = exact?.conversationId === conversationId ? exact.sessionId : null;
 }
 
+function desktopNeedsExactPrincipal(name: string, args: unknown): boolean {
+  if ((WINDOWS_COMPUTER_INPUT_METHODS as readonly string[]).includes(name)) return true;
+  if (name === 'read_clipboard' || name === 'write_clipboard') return true;
+  if (name !== 'computer' || !args || typeof args !== 'object') return false;
+  const actions = (args as { actions?: unknown }).actions;
+  if (!Array.isArray(actions)) return false;
+  return actions.some(action =>
+    !!action && typeof action === 'object' && (action as { type?: unknown }).type !== 'wait'
+  );
+}
+
 /** The only SDK handler context field this layer consumes; request identity comes from ingress ALS. */
 type McpCallContext = Pick<ServerContext, 'sessionId'>;
 
@@ -591,9 +602,11 @@ async function dispatchTracked(
   // before the shared blocked/superseded checks rather than guessing from selection.
   // Observation and its dependent input must resolve the same caller before either
   // handler runs. Recording a late identity cannot recover a discarded anonymous frame.
+  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
   const desktopContext = surface === 'desktop' && (name === 'get_window_state' ||
     (WINDOWS_COMPUTER_STATE_INPUT_METHODS as readonly string[]).includes(name));
-  if (!context.caller.conversationId && (desktopContext || name === 'exec' || name === 'update_plan' || (identitySensitive && swarmRunning())) && requestId) {
+  const desktopPrincipal = surface === 'desktop' && desktopNeedsExactPrincipal(name, args);
+  if (!context.caller.conversationId && (desktopContext || desktopPrincipal || name === 'exec' || name === 'update_plan' || (identitySensitive && swarmRunning())) && requestId) {
     setCallerConversation(
       context,
       await awaitFreshCallOrigin(name, startedAt, IDENTITY_EVIDENCE_MS, { requestId })
@@ -736,7 +749,6 @@ async function dispatchTracked(
   // chat over to `superseded`, chat A gets no tool at all, and each refusal tells the model
   // the only thing it can usefully do is write the brief.
   const compacting = !blockedChat && compactingConversation(context.caller.conversationId) !== null;
-  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
   const retiredLeaseAmbiguous =
     !allowUnattributed && hasRetiredWorkerLeases() && !context.caller.conversationId;
   const dormantLeaseAmbiguous =
@@ -1175,7 +1187,10 @@ export function authorizeToolAction(
     workspaceLease: null,
     operationId
   };
-  const decision = evaluateActionPolicy(action, { capabilities: ctx.caps, readOnly: ctx.readOnly }, requirement);
+  const decision = evaluateActionPolicy(action, {
+    capabilities: ctx.caps,
+    readOnly: ctx.readOnly
+  }, requirement);
   try {
     ctx.onActionPolicyDecision?.({
       ...decision,
@@ -1224,6 +1239,11 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
       const decision = this.authorize(name, requirement);
       if (decision.effect === 'deny') {
         const displayName = name.split(':', 1)[0] ?? name;
+        if (decision.reasonCode === 'caller_identity_required') {
+          return Promise.resolve(failIdentity(
+            `CALLER_IDENTITY_REQUIRED: ${displayName} requires exact companion request/chat/session identity. Retry after the companion reconnects; no Desktop action ran.`
+          ));
+        }
         return Promise.resolve(fail(
           decision.reasonCode === 'read_only'
             ? `TOOL_DISABLED: ${displayName} is disabled because Read-only mode is on. Ask the user to turn Read-only off in the app, then retry.`
@@ -1267,6 +1287,11 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
       return guard(name, async () => {
         const decision = authorizeToolAction(ctx, surface, name, { kind: 'capability', capability: cap });
         if (decision.effect === 'deny') {
+          if (decision.reasonCode === 'caller_identity_required') {
+            return failIdentity(
+              `CALLER_IDENTITY_REQUIRED: ${name} requires exact companion request/chat/session identity. Retry after the companion reconnects; no Desktop action ran.`
+            );
+          }
           // The effective capability can be off because Read-only overrides its checkbox.
           // Name that owner, otherwise use the same permission label as Settings.
           return fail(

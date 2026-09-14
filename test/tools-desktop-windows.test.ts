@@ -29,16 +29,30 @@ function surface(
   registerWindowsDesktopTools({ caps, exposedCaps: { ...caps },
     register: (name: string, config: any, handler: any) => tools.set(name, { config, handler }),
     authorize: (name: string, requirement: ActionRequirement) => authorizeToolAction(ctx, 'desktop', name, requirement),
-    guarded: async (cap: keyof Capabilities, name: string, run: () => Promise<any>) =>
-      authorizeToolAction(ctx, 'desktop', name, { kind: 'capability', capability: cap }).effect === 'allow'
-        ? run()
-        : { isError: true, content: [{ type: 'text', text: 'TOOL_DISABLED' }] }
+    guarded: async (cap: keyof Capabilities, name: string, run: () => Promise<any>) => {
+      const decision = authorizeToolAction(ctx, 'desktop', name, { kind: 'capability', capability: cap });
+      if (decision.effect === 'allow') return run();
+      return {
+        isError: true,
+        content: [{
+          type: 'text',
+          text: decision.reasonCode === 'caller_identity_required' ? 'CALLER_IDENTITY_REQUIRED' : 'TOOL_DISABLED'
+        }]
+      };
+    }
   } as never);
   return { caps, tools, call: (name: string, args: any = {}) => tools.get(name)!.handler(tools.get(name)!.config.inputSchema.parse(args)) };
 }
 const window = { app: 'fixture.exe', id: 71 };
 let principalSequence = 0;
-beforeEach(() => { vi.clearAllMocks(); native.apis.length = 0; native.allowUnattributed = false; native.call = { caller: { sessionId: `test-${++principalSequence}` } }; });
+beforeEach(() => {
+  vi.clearAllMocks();
+  native.apis.length = 0;
+  native.allowUnattributed = false;
+  native.act.mockResolvedValue({ clipboard: ['fixture'] });
+  const id = ++principalSequence;
+  native.call = { caller: { requestId: `request-${id}`, conversationId: `conversation-${id}`, sessionId: `test-${id}` } };
+});
 
 describe('Windows Desktop public registrar', () => {
   it('routes application launch and clipboard mutation through the central action vocabulary', async () => {
@@ -80,17 +94,54 @@ describe('Windows Desktop public registrar', () => {
     expect(native.apis).toHaveLength(0);
   });
 
+  it.each([
+    ['launch_app', { app: 'fixture.exe' }],
+    ['press_key', { window, key: 'A' }],
+    ['type_text', { window, text: 'fixture' }],
+    ['activate_window', { window }],
+    ['click', { window, x: 2, y: 3 }],
+    ['scroll', { window, x: 2, y: 3, scrollX: 0, scrollY: 120 }],
+    ['set_value', { window, element_index: 0, value: 'fixture' }],
+    ['drag', { window, from_x: 1, from_y: 1, to_x: 2, to_y: 2 }],
+    ['perform_secondary_action', { window, element_index: 0, action: 'Invoke' }],
+    ['write_clipboard', { text: 'fixture' }],
+    ['read_clipboard', {}]
+  ] as const)('denies unattributed %s before native work while an exact Principal keeps existing behavior', async (method, args) => {
+    native.call = { caller: { requestId: `unresolved-${method}`, conversationId: null, sessionId: null } };
+    const beforeApis = native.apis.length;
+    const denied = await surface().call(method, args);
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied)).toContain('CALLER_IDENTITY_REQUIRED');
+    expect(native.apis).toHaveLength(beforeApis);
+    expect(native.act).not.toHaveBeenCalled();
+
+    native.call = {
+      caller: {
+        requestId: `exact-${method}`,
+        conversationId: `conversation-${method}`,
+        sessionId: `session-${method}`
+      }
+    };
+    const allowed = await surface().call(method, args);
+    expect(allowed.isError).not.toBe(true);
+    if (method === 'read_clipboard' || method === 'write_clipboard') {
+      expect(native.act).toHaveBeenCalledTimes(1);
+    } else {
+      expect(native.apis.at(-1)?.[method]).toHaveBeenCalledOnce();
+    }
+  });
+
   it('keeps exact caller state across request registrars and never lends indexes to another caller', async () => {
     await surface().call('get_window_state', { window });
     const first = native.apis[0];
     await surface().call('click', { window, element_index: 2 });
     expect(first.click).toHaveBeenCalledExactlyOnceWith({ window, element_index: 2 });
-    native.call = { caller: { sessionId: 'other-principal' } };
+    native.call = { caller: { requestId: 'other-request', conversationId: 'other-chat', sessionId: 'other-principal' } };
     await surface().call('click', { window, element_index: 2 });
     expect(native.apis).toHaveLength(2);
     expect(native.apis[1].click).toHaveBeenCalledOnce();
     native.call = null;
-    await expect(surface().call('click', { window, x: 2, y: 3 })).rejects.toThrow(/CALLER_IDENTITY_REQUIRED/);
+    expect(JSON.stringify(await surface().call('click', { window, x: 2, y: 3 }))).toContain('CALLER_IDENTITY_REQUIRED');
     expect(native.apis).toHaveLength(2);
     await surface().call('list_windows');
     await surface().call('list_windows');
@@ -110,7 +161,7 @@ describe('Windows Desktop public registrar', () => {
     expect(JSON.stringify(result)).not.toContain('three');
   });
 
-  it('honors unattributed opt-in across registrars, isolates known callers and rechecks opt-out', async () => {
+  it('keeps unattributed observation isolated without letting the opt-in authorize Desktop mutation', async () => {
     await surface().call('get_window_state', { window });
     const identified = native.apis[0];
     native.call = { caller: { requestId: 'unresolved-observation' } };
@@ -118,20 +169,21 @@ describe('Windows Desktop public registrar', () => {
     await surface().call('get_window_state', { window });
     const anonymous = native.apis[1];
     native.call = { caller: { requestId: 'unresolved-input' } };
-    await surface().call('click', { window, element_index: 2 });
-    expect(anonymous.click).toHaveBeenCalledExactlyOnceWith({ window, element_index: 2 });
+    expect(JSON.stringify(await surface().call('click', { window, element_index: 2 }))).toContain('CALLER_IDENTITY_REQUIRED');
+    expect(anonymous.click).not.toHaveBeenCalled();
     expect(identified.click).not.toHaveBeenCalled();
     native.call = null;
-    await surface().call('drag', { window, from_x: 1, from_y: 1, to_x: 2, to_y: 2 });
+    expect(JSON.stringify(await surface().call('drag', { window, from_x: 1, from_y: 1, to_x: 2, to_y: 2 }))).toContain('CALLER_IDENTITY_REQUIRED');
     expect(native.apis).toHaveLength(2);
     native.allowUnattributed = false;
-    await expect(surface().call('click', { window, x: 2, y: 3 })).rejects.toThrow(/CALLER_IDENTITY_REQUIRED/);
-    expect(anonymous.click).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(await surface().call('click', { window, x: 2, y: 3 }))).toContain('CALLER_IDENTITY_REQUIRED');
+    expect(anonymous.click).not.toHaveBeenCalled();
     native.allowUnattributed = true;
     await surface().call('get_window_state', { window });
-    expect(native.apis).toHaveLength(3);
+    expect(native.apis).toHaveLength(2);
     native.allowUnattributed = false;
     await surface().call('list_windows');
+    expect(native.apis).toHaveLength(3);
   });
 
   it('returns image blocks and structured screenshot values under one combined response bound', async () => {
