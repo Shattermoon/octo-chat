@@ -103,8 +103,8 @@ so a later request cannot inherit an older registrar or operation classification
 - The low-level owner check is enforced where frames/refs are resolved, not only in the macOS MCP
   adapter, while internal/native callers that do not opt into an artifact owner retain their prior
   behavior.
-- Focused follow-up validation: `npm run typecheck` passed; `git diff --check` passed; 9 focused
-  Desktop/native/policy/code-mode/agents files passed with 309 tests / 8 platform-skipped.
+- Focused follow-up validation: `npm run typecheck` passed; `git diff --check` passed; 10 focused
+  Desktop/native/hardening/policy/code-mode/agents files passed with 325 tests / 8 platform-skipped.
 - Full MCP integration passed independently with 173 tests / 6 platform-skipped; privacy and
   third-party notice/source-package verification also passed.
 - No live macOS Desktop probe was exercised from this Windows development environment. The

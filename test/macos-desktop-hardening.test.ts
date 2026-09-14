@@ -111,7 +111,9 @@ describe('macOS desktop safety hardening', () => {
     expect(swift).toMatch(/rawRequested = request\["id"\][\s\S]*WINDOW_NOT_FOUND/);
     expect(swift).toContain('window \\(requested) is no longer available');
     expect(computer).toContain('Publish the crop as');
-    expect(computer).toMatch(/screenshotFromReply\(reply, file, opts\.crop \? null : opts\.window \?\? null\)/);
+    expect(computer).toMatch(
+      /screenshotFromReply\([\s\S]*?opts\.crop \? null : opts\.window \?\? null,[\s\S]*?opts\.artifactOwner \?\? null\s*\)/
+    );
     expect(computer).not.toContain('lastFrame?.windowId ?? null : cropFrame?.windowId');
     expect(computer).toContain("const frameWindow = captureMode === 'window' ? requestedWindow : null");
     expect(computer).toContain('windowId: frame.windowId');
