@@ -8,7 +8,7 @@ reviews:
   # boundaries. Prefer substantive correctness findings over a quiet/style-oriented review.
   profile: assertive
   # Findings can formally hold approval, but this never merges a PR and never replaces the
-  # remediation program's required counterpart review for high-risk work.
+  # repository maintainer's exact-final-SHA self-review and merge judgment for high-risk work.
   request_changes_workflow: true
   high_level_summary: true
   high_level_summary_in_walkthrough: true
@@ -28,7 +28,8 @@ reviews:
     # Never stop incremental reviews merely because a substantial PR needed several pushes.
     auto_pause_after_reviewed_commits: 0
     drafts: false
-    # Review ordinary and stacked PRs, not only PRs targeting the default branch.
+    # Review ordinary PRs targeting any branch. The remediation program itself does not stack
+    # implementation PRs under the current single-maintainer linear workflow.
     base_branches:
       - ".*"
 

@@ -1,6 +1,6 @@
 # FS-001 no-follow walk symlink metadata
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 
 **Branch:** `fix/fs-001-no-follow-symlink-metadata`
 

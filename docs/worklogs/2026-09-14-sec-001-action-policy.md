@@ -1,6 +1,6 @@
 # SEC-001 central action-policy seam
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 
 **Branch:** `feat/sec-001-action-policy`
 
@@ -88,7 +88,7 @@ makes that transitional shape explicit instead of implying every listed capabili
   decision now carries `capabilityMode` (`none`, `single`, or `any`), and a regression proves an
   `any` requirement is allowed by one live alternative while remaining unambiguous to later
   diagnostics/policy consumers.
-- Maintainer B's counterpart review found that the first allow-only application-state/remote-read
+- The then-required counterpart review found that the first allow-only application-state/remote-read
   routes observed policy but discarded the decision. `session`, `update_plan`, `session_finish`,
   `agents`, and `download_artifact:remote` now run their existing bodies only inside
   `enforcePolicy`. A regression forces a central deny on `session` and proves its pre-existing
@@ -102,7 +102,7 @@ makes that transitional shape explicit instead of implying every listed capabili
   never runs.
 - After that enforcement fix, the 3-file nested/declaration/inbox set remained 24/24 green and the
   full MCP suite remained 173 passed / 6 platform-skipped; notices, privacy and diff checks also
-  remained green on the `e36d78e` base. Fresh supported-platform CI and Maintainer B re-review of
+  remained green on the `e36d78e` base. Fresh supported-platform CI and the then-required human re-review of
   the exact pushed SHA remain required before merge.
 
 No package/installed/live-browser claim is made by this PR. It changes pure policy/dispatch

@@ -1,6 +1,6 @@
 # REL-001 deterministic release-oracle repair
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 
 **Branch:** `fix/rel-001-release-oracle`
 

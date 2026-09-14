@@ -1,11 +1,12 @@
-# Octo Chat remediation program — two-maintainer execution plan
+# Octo Chat remediation program — single-maintainer linear execution plan
 
 **Program baseline:** 2026-09-14
+**Operating-model revision:** 2026-09-15 — one human maintainer, strictly linear implementation PRs
 **Current repository line:** Octo Chat 2.2.0, bridge protocol 14
 **Finding source:** [`octo-chat-full-audit-2026-09-14.md`](octo-chat-full-audit-2026-09-14.md)
 **Historical engineering reports:** [`old docs-report/`](<old docs-report/>)
 
-This document is the working plan for turning the 2026-09-14 audit into a sequence of reviewable pull requests owned by **two continuously active maintainers using AI development workers**. It is deliberately more concrete than the audit's broad phases: it defines ownership, dependencies, merge order, concurrency, fallback work when a PR is waiting, and the evidence required before each tranche is considered complete.
+This document is the working plan for turning the 2026-09-14 audit into a sequence of reviewable pull requests owned by **one human maintainer using AI development workers**. Implementation is deliberately linear: one coding PR reaches review, evidence and merge before production work begins on the next PR. The plan defines ownership, dependencies, exact merge order, what may be investigated while CI/review is running, and the evidence required before each tranche is considered complete.
 
 The audit was performed against the pre-reset 2.1.11 / bridge-13 tree. The current public line is 2.2.0 / bridge 14. Every implementation PR therefore starts by re-reading the current owner code and reproducing or re-confirming the finding on current `main`; an audit item is not permission to blindly paste an old fix into a moved subsystem.
 
@@ -37,18 +38,17 @@ exact Principal
 
 ## 2. Human ownership model
 
-Two humans own the program. Each pull request has exactly one accountable human owner even when AI workers produce portions of the patch.
+One human maintainer owns the entire remediation program and is accountable for every pull request, review decision and merge. The previous authority-vs-reliability human split is retired. Semantic ownership still matters inside the codebase, but it no longer maps to separate people or parallel lanes.
 
-| Maintainer | Primary lane | Typical semantic owners |
+| Human owner | Program scope | Typical semantic owners |
 | --- | --- | --- |
-| **Maintainer A — Authority lane** | security policy, Desktop, workspace, GitHub integration, updater trust, platform cleanup | `config`, `capabilities`, policy/Principal/leases, Desktop registrars/native boundary, workspace, updater/release security |
-| **Maintainer B — Reliability lane** | CI oracle, durable identity/session state, bridge/repairs, Goal, plugins, extension/provider adapters | correlation/session store, bridge lifecycle, Goal ledgers, plugin manager/refresh/tests, extension orchestration, stateful test infrastructure |
+| **Repository maintainer** | security, reliability, CI, Desktop, sessions, bridge, Goal, plugins, extension/provider adapters, workspace, updater/release | `config`, `capabilities`, policy/Principal/leases, MCP/Desktop/native boundaries, correlation/session state, bridge lifecycle, Goal ledgers, plugin manager/refresh, extension orchestration, stateful tests and release security |
 
-Ownership is about merge responsibility, not exclusive knowledge. The other maintainer is the first reviewer for security- or durability-sensitive PRs.
+For security- or durability-sensitive PRs, the maintainer performs an explicit **exact-SHA self-review after implementation is complete**, leaves a GitHub review comment recording the checklist/results/open risks, and merges only after required checks are green and substantive automated-review findings are resolved. Self-review is not described as independent human review; the evidence must be concrete enough for later audit.
 
 ### AI-worker rules
 
-Each maintainer may use up to **four direct development subagents concurrently** when the work genuinely decomposes. Nested delegation is prohibited. A maintainer gives every worker:
+The maintainer may use up to **four direct development subagents concurrently** when the work genuinely decomposes. Nested delegation is prohibited. Every worker receives:
 
 - the exact project and base commit;
 - one concrete question or implementation slice;
@@ -57,20 +57,20 @@ Each maintainer may use up to **four direct development subagents concurrently**
 - focused checks to run;
 - the expected handoff format.
 
-Workers on the same PR must have disjoint write ownership unless one is explicitly audit-only. The human owner reviews the complete diff and independently verifies security/durability claims; parallel AI reports are evidence inputs, not votes.
+Workers on the same PR must have disjoint write ownership unless one is explicitly audit-only. The human maintainer reviews the complete diff and independently verifies security/durability claims; parallel AI reports are evidence inputs, not votes or approvals.
 
 ## 3. Work-in-progress and PR discipline
 
-The goal is continuous throughput without creating a merge-conflict queue.
+The goal is deterministic progress without hidden stacks or merge-conflict queues.
 
-1. Each maintainer normally has **one active coding PR** and may have **one additional PR in review/CI**.
-2. A second coding PR is allowed only when it is file/semantic-owner disjoint from the first or is an explicitly declared stacked child.
-3. Stacked PRs are limited to **two deep**. The child description must contain `Depends on: #<parent>` and must be rebased onto current `main` after the parent merges.
-4. Two maintainers do not concurrently edit the same durable state machine. If both need the same owner, one PR establishes the seam and the other depends on it.
-5. Cross-cutting refactors are not mixed with unrelated fixes. A PR should close one coherent set of audit IDs with one rollback/review story.
-6. Every PR starts from current `main`, records the audit IDs it addresses, and says which audit claim was re-confirmed on the current tree.
-7. Every PR description includes: invariant, dependency, changed semantic owners, migration/restore behavior if durable state changes, regression tests, focused checks, broader checks, and any remaining evidence level that was not exercised.
-8. Merge only after the counterpart has reviewed high-risk changes and required checks are green. Prefer one coherent squashed commit per PR unless preserving contributor authorship requires a different history shape.
+1. There is exactly **one active implementation PR** at a time. Do not start production-code changes for the next PR until the current implementation PR is merged.
+2. Do not create stacked implementation PRs. A dependency is satisfied by merging the parent to `main`, then starting the child from the new `main`.
+3. While the active PR is waiting on CI, CodeRabbit or deliberate self-review, the maintainer may perform read-only investigation, reproduction, test design and planning for later PRs, but must not create a second production implementation branch.
+4. Cross-cutting refactors are not mixed with unrelated fixes. A PR should close one coherent set of audit IDs with one rollback/review story.
+5. Every implementation PR starts from current `main`, records the audit IDs it addresses, and says which audit claim was re-confirmed on the current tree.
+6. Every PR description includes: invariant, dependency, changed semantic owners, migration/restore behavior if durable state changes, regression tests, focused checks, broader checks, and any remaining evidence level that was not exercised.
+7. Before merge, the maintainer reviews the **exact final pushed SHA** and leaves a GitHub comment recording the security/durability checklist where applicable, changed semantic owners, validation evidence and known residual risk. If a new commit is pushed afterward, repeat that self-review on the new SHA.
+8. Merge only after dependencies are satisfied, required hosted checks are green and substantive CodeRabbit findings on the final head are resolved or explicitly dispositioned. Prefer one coherent squashed/rebased commit per PR unless preserving contributor authorship requires a different history shape.
 
 Recommended branch names:
 
@@ -83,7 +83,7 @@ fix/goal-durable-debt
 
 ## 4. Dependency map
 
-The critical path is intentionally narrow. Many reliability tasks remain available while the authority spine is under review.
+The graph below records technical dependencies only. It does **not** authorize parallel implementation; the authoritative execution order is the serial queue in §5.
 
 ```mermaid
 flowchart TD
@@ -116,15 +116,15 @@ flowchart TD
 
 ## 5. Pull-request queue and merge order
 
-The queue below is the default ordering. A maintainer may pull an independent fallback task forward when their critical-path PR is waiting, but may not bypass a dependency listed here.
+The queue below is the authoritative implementation order. The maintainer completes and merges one implementation PR before beginning production changes for the next. Existing completed items stay recorded at their original PR numbers; dependency arrows still explain *why* an item cannot move earlier.
 
-### Wave 0 — establish a trustworthy oracle and the policy seam
+### Stage 0 — establish a trustworthy oracle and the policy seam
 
-These two PRs start in parallel immediately after this planning baseline.
+These foundation PRs were completed before the single-maintainer operating-model revision. Their original numbering is retained so audit references and merged history remain stable.
 
 #### PR-01 — deterministic release-oracle repairs
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit IDs:** REL-001, TEST-001, MCP-001 first tranche
 **Depends on:** none
 **Blocks:** CI-001 stabilization and every later claim that `verify:ci` is a trustworthy gate
@@ -145,7 +145,7 @@ Exit evidence:
 
 #### PR-02 — central action-policy seam, behavior preserving
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** SEC-001
 **Depends on:** none
 **Blocks:** PR-03, PR-05, PR-09, PR-10
@@ -166,11 +166,11 @@ Exit evidence:
 - representative Core and Desktop actions demonstrably pass through one policy seam;
 - no adapter can silently construct a second policy vocabulary for the same action class.
 
-### Wave 1 — close the P0 authority gaps and stabilize stateful CI
+### Stage 1 — close the P0 authority gaps and stabilize stateful CI
 
 #### PR-03 — exact Principal on every Desktop mutation
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit IDs:** SEC-002, SEC-003
 **Depends on:** PR-02
 **Blocks:** PR-05
@@ -180,7 +180,8 @@ Scope:
 - require exact caller identity for every Desktop mutation, app/process launch and clipboard write;
 - make an explicit product decision for clipboard read and encode it in the same policy rather than a separate handler shortcut;
 - cover `launch_app`, `press_key`, `type_text`, `activate_window`, click/scroll/value/drag/secondary actions and code-mode children;
-- make `allowUnattributedCalls=false` mean no unattributed mutation, regardless of Desktop method family.
+- treat clipboard read as sensitive disclosure requiring the same exact Principal;
+- keep `allowUnattributedCalls` for eligible self-contained work, not as authority for Desktop mutation/app launch/clipboard access.
 
 Required regression:
 
@@ -191,7 +192,7 @@ known exact Principal + capability enabled → existing behavior
 
 #### PR-04 — durable request ownership and session deletion fencing
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit IDs:** ID-001, SES-001
 **Depends on:** none
 **Enables:** PR-09's durable lease integration
@@ -210,7 +211,7 @@ Required regressions:
 
 #### PR-05 — restricted Desktop, least-privilege defaults and truthful permission UX
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit IDs:** SEC-004, SEC-005, SEC-006, SEC-007
 **Depends on:** PR-03
 **Blocks:** PR-24 macOS runtime deletion if shared Desktop setup files overlap
@@ -239,10 +240,10 @@ fresh install
 
 #### PR-06 — aggregate-suite contamination and timing repair
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** CI-001
 **Depends on:** PR-01
-**Can run while:** PR-03/PR-05 are in review
+**Linear position:** after PR-05 in the single-maintainer queue
 
 Scope:
 
@@ -256,13 +257,13 @@ Exit evidence:
 - the previously aggregate-only failing suites pass repeatedly in loaded order;
 - full verification is stable over multiple consecutive runs or remaining failures have a reproducible isolated cause with a dedicated follow-up PR.
 
-### Wave 2 — browser lifecycle, workspace authority and typed remote actions
+### Stage 2 — browser lifecycle, workspace authority and typed remote actions
 
 #### PR-07 — bridge lifecycle generation around browser delivery
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** BRG-001
-**Depends on:** Wave 0 baseline only
+**Depends on:** Stage 0 baseline only
 **Blocks:** PR-08
 
 Scope:
@@ -276,7 +277,7 @@ Required regression: pause lease persistence, initiate shutdown, release persist
 
 #### PR-08 — final authority claim for every repair
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** BRG-002
 **Depends on:** PR-07
 **Blocks:** PR-21
@@ -289,10 +290,10 @@ Scope:
 
 #### PR-09 — durable WorkspaceLease
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** WS-001
 **Depends on:** PR-02 and PR-04
-**Can run while:** PR-07/PR-08 are being reviewed
+**Linear position:** after PR-08 in the single-maintainer queue
 
 Scope:
 
@@ -305,7 +306,7 @@ Regression: two primes/two projects plus reused worker labels cannot cross lease
 
 #### PR-10 — typed GitHub remote integration
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** GH-001
 **Depends on:** PR-02; merge after PR-05 so remote mutation follows final policy vocabulary
 
@@ -318,16 +319,16 @@ Scope:
 
 #### PR-11 — filesystem no-follow symlink metadata boundary
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** FS-001
 **Depends on:** none
-**Role:** preferred filler task while a larger A-lane PR waits for review
+**Status/role:** already completed as an independent early hardening item; no longer used as fallback work
 
 Scope: classify a directory symlink with `lstat`/dirent and skip it before target `stat` when no-follow is selected.
 
 #### PR-12 — Goal reply-debt foundations
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit IDs:** GOAL-001, GOAL-002
 **Depends on:** no Goal refactor parent; schedule after PR-08 if bridge overlap is high
 **Blocks:** PR-13
@@ -338,13 +339,13 @@ Scope:
 - strengthen provisional identity when exact event sequence arrives;
 - separate provider/draft-attempt cancellation from semantic reply-debt disposition.
 
-### Wave 3 — Goal and plugin reliability
+### Stage 3 — Goal and plugin reliability
 
-Goal PRs are deliberately serialized because they share one durable control plane. Plugin PRs are also sequenced where they touch the same manager/extension refresh lifecycle.
+Goal PRs are deliberately contiguous because they share one durable control plane. Plugin PRs follow in the same linear program where they touch the same manager/extension refresh lifecycle.
 
 #### PR-13 — transactional Goal control store
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** GOAL-003
 **Depends on:** PR-12
 **Blocks:** PR-14, PR-15
@@ -353,7 +354,7 @@ Create one serialized semantic transaction owner for objectives, switches and re
 
 #### PR-14 — continuation Goal debt disposition
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** GOAL-004
 **Depends on:** PR-13
 **Blocks:** PR-15
@@ -362,7 +363,7 @@ Make A→B continuation commit explicitly supersede or transfer source reply deb
 
 #### PR-15 — isolate Goal helper Temporary Chats from user targets
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** GOAL-005
 **Depends on:** PR-14
 **Blocks:** PR-21, PR-26
@@ -371,25 +372,25 @@ Separate `GoalControlProvider`, `UserChatTargetAllocator`, debt and delivery rol
 
 #### PR-16 — plugin refresh lease vs actual click attempt
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** PLUG-001
-**Depends on:** none; avoid concurrent extension edits with PR-15
+**Depends on:** none technically; scheduled after PR-15 by the linear queue
 **Blocks:** PR-21
 
 Use explicit `pending → leased → clicking → verifying → complete/manual-required` semantics. A proved zero-click precondition failure releases the lease instead of permanently consuming the attempt.
 
 #### PR-17 — exact npm plugin installation root
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** PLUG-004
 **Depends on:** none
-**Can run while:** Goal work is serialized on B lane
+**Linear position:** after PR-16 in the single-maintainer queue
 
 Force an explicit plugin generation project root/prefix and verify install output cannot walk to an ancestor package root. Add the nested-parent-package regression from the audit.
 
 #### PR-18 — Playwright production/test parity
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** PLUG-002
 **Depends on:** PR-16 if shared readiness/refresh states are touched
 **Blocks:** PR-19
@@ -398,7 +399,7 @@ Choose and document one production browser contract, then make the live test use
 
 #### PR-19 — Memory production lifecycle acceptance
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** PLUG-003
 **Depends on:** PR-18 production plugin harness
 **Blocks:** PR-20's health UI claims
@@ -422,18 +423,18 @@ Do not change the stable Memory data path unless this test produces evidence req
 
 #### PR-20 — plugin health chain and diagnostics signals
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** PLUG-005
 **Depends on:** PR-19 so the health vocabulary reflects proven production stages
 **Blocks:** PR-26
 
 Expose installation, local server connection, app/editor probe, local schema revision, provider connector schema, current-chat declaration and last probe separately. A single enabled/green state must not imply the entire chain is healthy.
 
-### Wave 4 — decomposition and secondary hardening
+### Stage 4 — decomposition and secondary hardening
 
 #### PR-21 — provider-private extension adapters
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** EXT-001
 **Depends on:** PR-08, PR-15, PR-16
 **Blocks:** PR-22, PR-26
@@ -442,7 +443,7 @@ Split conversation, composer, model-picker, Temporary Chat, Plugins settings and
 
 #### PR-22 — move durable orchestration authority main-side
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** EXT-002
 **Depends on:** PR-21
 
@@ -450,15 +451,15 @@ Move durable workflow state out of provider-private DOM owners where possible. T
 
 #### PR-23 — agent lookup and persistence efficiency
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit IDs:** AG-001, AG-002
-**Depends on:** none; schedule when A lane has no critical security child ready
+**Depends on:** none technically; scheduled after PR-22 by the linear queue
 
 Add a validated dormant `conversationId → owner` reverse index and use lazy debounced swarm snapshot materialization while retaining immediate durable acceptance barriers.
 
 #### PR-24 — remove paused macOS runtime/helper/tests
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** PLATFORM-002
 **Depends on:** PR-05 if shared Desktop capability/config/setup files overlap
 
@@ -468,14 +469,14 @@ The release matrix is already Windows/Linux. This PR removes the dormant macOS D
 
 Split into two PRs if either side grows beyond reviewable scope.
 
-**PR-25a owner:** Maintainer B — BRG-003, remove passive app-show browser opening; browser launch requires an explicit operation owner.
-**PR-25b owner:** Maintainer A — BRG-004, document the same-user localhost pairing threat decision and, if in scope, implement native/OS-IPC or challenge-based hardening.
+**PR-25a owner:** Repository maintainer — BRG-003, remove passive app-show browser opening; browser launch requires an explicit operation owner.
+**PR-25b owner:** Repository maintainer — BRG-004, document the same-user localhost pairing threat decision and, if in scope, implement native/OS-IPC or challenge-based hardening.
 
 `BRG-004` is allowed to end in an explicit documented threat-model decision before implementation if product requirements intentionally accept same-user local processes.
 
 #### PR-26 — content-free diagnostics page
 
-**Owner:** Maintainer A, reviewed by Maintainer B
+**Owner:** Repository maintainer
 **Audit ID:** OBS-001
 **Depends on:** PR-15, PR-20, PR-21 and stable Principal/lease vocabulary from PR-02/PR-09
 
@@ -483,7 +484,7 @@ Expose identity, workspace lease, Desktop mode/helper generation, plugin health 
 
 #### PR-27 — independent update authenticity
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 **Audit ID:** SUP-001
 **Depends on:** no code dependency; production completion depends on publisher-key/signing infrastructure
 
@@ -491,62 +492,42 @@ Implement signer verification and signed-manifest/trust-root support appropriate
 
 #### PR-28 — final release-oracle hardening
 
-**Owner:** Maintainer B
+**Owner:** Repository maintainer
 **Audit IDs:** CI-001 completion, DOC-001
 **Depends on:** major state-machine work merged
 
 Remove temporary diagnostic scaffolding that is no longer needed, retain useful repeat jobs for stateful owners, correct remaining plugin/tool documentation drift, and prove the supported Windows/Linux CI/release gate is repeatable.
 
-## 6. What each maintainer does while waiting
+## 6. What the maintainer does while waiting
 
-Waiting for review, CI or a dependency is not idle time. The next task must be independent enough that it cannot create a hidden merge stack.
+Waiting for CI, CodeRabbit, a deliberate review pass or an external dependency does not justify a second implementation branch. The program stays linear. While the active PR is waiting, the maintainer may use the time for work that cannot create merge debt:
 
-### Maintainer A fallback queue
+1. perform a read-only audit of the active PR against the security/durability checklist;
+2. investigate the *next* queued PR on current `main` without editing production files;
+3. reproduce a known failure and record the smallest deterministic test design without committing the fix yet;
+4. inspect upstream/provider/platform behavior needed by a later PR and record evidence;
+5. prepare adversarial test cases or migration/recovery scenarios as notes;
+6. review CodeRabbit findings and CI failures for the active exact SHA;
+7. update factual worklog evidence for the active PR.
 
-Use this order when the next critical authority PR is blocked:
-
-1. PR-11 `FS-001` no-follow symlink metadata fix;
-2. PR-17 `PLUG-004` exact npm prefix/root;
-3. PR-23 `AG-001/AG-002` reverse index/lazy snapshot, if no agent owner is active elsewhere;
-4. PR-24 macOS-removal preparation or focused deletion after PR-05 has merged;
-5. PR-27 updater-authenticity test harness/design that does not require live credentials;
-6. read-only review of B's current high-risk PR and preparation of adversarial test cases.
-
-### Maintainer B fallback queue
-
-Use this order when the next bridge/Goal/plugin PR is blocked:
-
-1. reproduce/diagnose CI-001 failures with the repeat/random-order harness;
-2. build the Memory lifecycle fixture without changing production persistence;
-3. measure the exact Playwright production readiness path and remove test-only assumptions in a branch that does not overlap active refresh changes;
-4. add content-free failure counters for already-stable owners, without inventing final UI semantics prematurely;
-5. prepare regression tests for the next bridge/Goal transition against current `main`;
-6. read-only review of A's current policy/Desktop/workspace PR.
-
-### Rule for choosing fallback work
-
-Do not start fallback work merely because it is listed. It is eligible only if:
-
-- its dependencies are satisfied;
-- it does not modify the same semantic owner as either maintainer's active PR;
-- it can be merged independently or declared as a two-deep stack;
-- its tests do not require an unmerged production API unless it is explicitly a stacked child.
+Do not open a second coding PR, do not create a stacked child, and do not commit production changes for the next queue item until the active implementation PR is merged. AI workers may perform bounded read-only investigations in parallel; their reports are preparation for the maintainer's later implementation, not hidden parallel development.
 
 ## 7. Daily continuous-working loop
 
-Both maintainers repeat the same operating loop:
+The maintainer repeats this operating loop:
 
 1. fetch/sync current `main` and read this program's current queue;
-2. claim one unblocked PR and note dependencies in the branch/PR description;
+2. take the first unmerged PR in the serial queue whose technical dependencies are satisfied and note them in the branch/PR description;
 3. inspect current source/callers/tests before modifying anything;
 4. delegate bounded slices to AI workers when useful, with a maximum of four direct workers and no nested delegation;
 5. keep one human semantic owner for the PR and resolve worker overlaps before integration;
 6. run focused tests while iterating;
 7. inspect the full diff, run the required subsystem gate, then open/update the PR;
-8. counterpart performs the first high-risk review while the owner pulls eligible fallback work;
-9. merge only after dependencies and checks are satisfied;
-10. rebase any stacked child onto new `main`, rerun its focused tests and update its dependency declaration;
-11. update this roadmap only when dependency/ownership reality changes—not for routine percentage/status tracking.
+8. perform an exact-final-SHA self-review; for high-risk work leave a GitHub comment that explicitly answers the checklist in §9 and records unresolved risk;
+9. resolve or disposition substantive CodeRabbit findings and inspect hosted CI on that same final head;
+10. merge only after dependencies and required checks are satisfied;
+11. fetch current `main`, verify the merge, then begin the next serial queue item from that new base;
+12. update this roadmap only when dependency/order reality changes—not for routine percentage/status tracking.
 
 ## 8. Required PR evidence
 
@@ -578,7 +559,7 @@ Passing a lower level cannot be described as proving a higher one.
 
 ## 9. Review checklist for security and durability PRs
 
-Before approval, the reviewing maintainer answers these questions explicitly:
+Before merging a security- or durability-sensitive PR, the maintainer answers these questions explicitly in the exact-SHA self-review comment:
 
 - Who owns the action/state before and after this change?
 - What exact generation/Principal proves that owner?
@@ -591,9 +572,9 @@ Before approval, the reviewing maintainer answers these questions explicitly:
 - Does the test exercise the failing interleaving, not only the settled happy path?
 - Did the PR preserve existing no-retry, sandbox, receipt and generation invariants?
 
-## 10. Wave release gates
+## 10. Stage release gates
 
-### Gate A — after Wave 1
+### Gate A — after Stage 1
 
 - deterministic schema/locale tests are green;
 - `command=false` plus restricted Desktop cannot create command-equivalent execution;
@@ -603,7 +584,7 @@ Before approval, the reviewing maintainer answers these questions explicitly:
 
 No new high-authority feature work should bypass this gate.
 
-### Gate B — after Wave 2
+### Gate B — after Stage 2
 
 - permanent ownership facts do not disappear under cache pressure;
 - deleted sessions cannot be resurrected by reconstruction;
@@ -612,7 +593,7 @@ No new high-authority feature work should bypass this gate.
 - workers/projects use explicit durable workspace leases;
 - remote GitHub mutation no longer requires Desktop-terminal improvisation.
 
-### Gate C — after Wave 3
+### Gate C — after Stage 3
 
 - Goal provisional debt survives restart exactly once;
 - attempt cancellation does not silently settle semantic debt;
@@ -633,18 +614,43 @@ No new high-authority feature work should bypass this gate.
 - full supported-platform verification is repeatably green;
 - the current README, `SECURITY.md`, `AGENTS.md`, setup docs and tool surface describe actual authority and supported behavior.
 
-## 11. Initial task board
+## 11. Single-maintainer serial task board
 
-Immediately after this planning baseline merges, the two maintainers should start here:
+The following order is authoritative unless a newly reproduced dependency forces this document to be revised. “Completed” items are kept in place for history; the next implementation always starts from current `main` only after the previous active implementation PR is merged.
 
-| Maintainer | Start now | Next after review/merge | Independent fallback |
-| --- | --- | --- | --- |
-| A | **PR-02 SEC-001 action-policy seam** | PR-03 → PR-05 | PR-11 FS-001 |
-| B | **PR-01 REL-001/TEST-001 release-oracle repair** | PR-04 or PR-06; then PR-07 | CI reproduction / Memory harness |
+| Order | PR | Purpose | State at 2026-09-15 revision |
+| ---: | --- | --- | --- |
+| 1 | PR-01 | REL-001 / TEST-001 / MCP-001 release-oracle repair | completed |
+| 2 | PR-02 | SEC-001 central action-policy seam | completed |
+| 3 | PR-11 | FS-001 no-follow symlink metadata boundary | completed early; retained historical number |
+| 4 | **PR-03** | SEC-002 / SEC-003 exact Desktop Principal | **active; finish, self-review exact SHA, merge first** |
+| 5 | PR-04 | ID-001 / SES-001 durable request ownership + session deletion fencing | next |
+| 6 | PR-05 | SEC-004..007 restricted Desktop + least-privilege defaults | after PR-04; technical dependency remains PR-03 |
+| 7 | PR-06 | CI-001 aggregate-suite contamination/timing repair | after PR-05 |
+| 8 | PR-07 | BRG-001 bridge lifecycle generation | after PR-06 |
+| 9 | PR-08 | BRG-002 final repair authority claim | after PR-07 |
+| 10 | PR-09 | WS-001 durable WorkspaceLease | after PR-08; requires PR-02 + PR-04 |
+| 11 | PR-10 | GH-001 typed GitHub remote integration | after PR-09; requires PR-02 and final PR-05 policy vocabulary |
+| 12 | PR-12 | GOAL-001 / GOAL-002 reply-debt foundations | after PR-10 |
+| 13 | PR-13 | GOAL-003 transactional Goal control store | after PR-12 |
+| 14 | PR-14 | GOAL-004 continuation debt disposition | after PR-13 |
+| 15 | PR-15 | GOAL-005 helper Temporary Chat isolation | after PR-14 |
+| 16 | PR-16 | PLUG-001 refresh lease vs click attempt | after PR-15 |
+| 17 | PR-17 | PLUG-004 exact npm plugin installation root | after PR-16 |
+| 18 | PR-18 | PLUG-002 Playwright production/test parity | after PR-17; requires PR-16 if shared readiness state changes |
+| 19 | PR-19 | PLUG-003 Memory production lifecycle acceptance | after PR-18 |
+| 20 | PR-20 | PLUG-005 plugin health chain + diagnostics signals | after PR-19 |
+| 21 | PR-21 | EXT-001 provider-private extension adapters | after PR-20; requires PR-08 + PR-15 + PR-16 |
+| 22 | PR-22 | EXT-002 move durable orchestration main-side | after PR-21 |
+| 23 | PR-23 | AG-001 / AG-002 agent lookup + persistence efficiency | after PR-22 |
+| 24 | PR-24 | PLATFORM-002 remove paused macOS runtime/helper/tests | after PR-23; requires PR-05 where shared Desktop files overlap |
+| 25 | PR-25a | BRG-003 passive app-show browser opening removal | after PR-24 |
+| 26 | PR-25b | BRG-004 localhost trust decision/hardening | after PR-25a |
+| 27 | PR-26 | OBS-001 content-free diagnostics page | after PR-25b; requires PR-09 + PR-15 + PR-20 + PR-21 |
+| 28 | PR-27 | SUP-001 independent update authenticity | after PR-26 |
+| 29 | PR-28 | CI-001 completion + DOC-001 final release-oracle hardening | final implementation/release-hardening PR |
 
-When PR-02 is in review, A can pull PR-11 rather than begin PR-03 on a stale policy API. When PR-01 is in review, B can start PR-04 because it is independent of the schema/locale fix. Once PR-02 merges, PR-03 takes priority over A's fallback work. Once deterministic CI is repaired, B should keep CI-001 diagnosis running alongside the durable-state/bridge queue without editing the same owners.
-
-This pattern—**one critical-path PR plus one disjoint fallback, with explicit dependencies and cross-review**—is the operating model for the entire remediation program.
+This is a **one-implementation-PR-at-a-time** program. Parallelism is limited to bounded AI investigation inside the current PR or read-only preparation for later work. There is no second human lane, no counterpart-review gate, no fallback coding branch, and no stacked implementation queue.
 
 ## 12. Backlog coverage
 

@@ -1,6 +1,6 @@
 # CodeRabbit repository review policy
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 
 **Branch:** `chore/coderabbit-review-policy`
 
@@ -12,8 +12,8 @@ durability, Desktop, plugin and release-oracle invariants rather than generic st
 
 ## Invariants
 
-- CodeRabbit is an additional reviewer, not a substitute for the remediation program's required
-  counterpart review on high-risk security/durability PRs.
+- CodeRabbit is an additional reviewer, not a substitute for the repository maintainer's required
+  exact-final-SHA self-review on high-risk security/durability PRs.
 - Review configuration must not grant CodeRabbit authority to merge or change application code.
 - Reviews prioritize preserving existing working features while finding correctness, security,
   lifecycle, concurrency and compatibility regressions.
@@ -30,8 +30,8 @@ durability, Desktop, plugin and release-oracle invariants rather than generic st
 - Disable the generic docstring coverage check/finishing touch because percentage coverage is not a
   release-quality signal in this repository.
 - Enable `request_changes_workflow` so unresolved CodeRabbit findings/latest-commit review state can
-  participate in approval; this does not merge a PR and does not replace explicit maintainer merge
-  judgment or the required counterpart approval on high-risk work.
+  participate in approval; this does not merge a PR and does not replace the repository maintainer's
+  exact-final-SHA self-review or explicit merge judgment on high-risk work.
 
 ## Evidence
 

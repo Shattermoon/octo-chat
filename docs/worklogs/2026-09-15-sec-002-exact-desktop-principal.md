@@ -1,6 +1,6 @@
 # SEC-002 / SEC-003 exact Desktop Principal
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 
 **Branch:** `feat/sec-002-exact-desktop-principal`
 
@@ -81,5 +81,6 @@ browser-chord protections, native helper generations, live capability checks and
   aggregate oracle look green. PR-06 remains the owner of that instability.
 - Independent PR-03 audit found no High/Medium merge blocker and confirmed that the Windows
   observation-state/native generation owners remain unchanged below the central policy seam.
-- Hosted Linux/Windows CI and Maintainer B exact-SHA counterpart review are still required before
-  merge and will be recorded on the pushed review head.
+- Hosted Linux/Windows CI and the repository maintainer's exact-final-SHA self-review are still
+  required before merge and will be recorded on the pushed review head. CodeRabbit remains an
+  additional automated review signal, not a substitute for the maintainer's review judgment.

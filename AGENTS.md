@@ -462,9 +462,12 @@ defers the appendix. Nested calls record refusals but only the outer result deli
 including Core's structured supplemental context. Current blocked, compacting, superseded and
 inactive-worker restrictions veto delivery; the notice never grants permission or repeats work.
 
-`allowUnattributedCalls` permits ordinary tools and code mode without chat attribution,
-including computer use, approved file edits, shell commands and external plugin tools.
-Windows observations use a separate shared unattributed context so follow-up input works.
+`allowUnattributedCalls` permits eligible self-contained tools and code mode without chat
+attribution, including approved file edits, shell commands and external plugin tools. Desktop is
+stricter: application/process launch, input mutations and clipboard read/write require an exact
+request/conversation/local-session Principal even when unattributed work is otherwise allowed.
+Windows observations may use a separate shared unattributed context, but that context cannot
+authorize follow-up input.
 Plan updates, agent operations, finish signals, chat-specific workspace selection and owned
 terminal access still require their actual owner; the setting cannot invent that identity.
 Anonymous terminals retain their existing anonymous custody. Live capabilities, approved roots
@@ -1914,6 +1917,15 @@ For the current hardening program, use `docs/octo-chat-full-audit-2026-09-14.md`
 basis and `docs/remediation-program-2026-09-14.md` as the dependency/ownership/PR plan. Earlier
 engineering audits and worklogs are archived under `docs/old docs-report/`; they are historical
 evidence, not current implementation authority.
+
+The hardening program currently has **one human maintainer**. Run implementation PRs strictly
+linearly: one active coding PR, no stacked implementation child and no second fallback coding
+branch while CI/review is pending. AI workers may investigate bounded slices concurrently, but
+they are evidence sources, not human approvers. For security/durability-sensitive PRs, the
+maintainer must review the exact final pushed SHA, leave a GitHub self-review comment recording
+the applicable ownership/generation/side-effect/crash/revocation checks and validation evidence,
+resolve or explicitly disposition substantive CodeRabbit findings, and merge only after required
+hosted checks are green. Do not wait for, invent or claim a nonexistent counterpart maintainer.
 
 When integrating external PRs, preserve original authorship. Adapted or snapshot-integrated
 work must name the original PR/author and carry appropriate GitHub-linked `Co-authored-by`
