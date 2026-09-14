@@ -1,10 +1,12 @@
-# FS-001 no-follow walk symlink metadata
+# [DONE][FS-001] No-Follow Walk Symlink Metadata
 
 **Owner:** Repository maintainer
 
 **Branch:** `fix/fs-001-no-follow-symlink-metadata`
 
 **Audit ID:** FS-001
+
+**State:** `DONE`
 
 **Base:** `804be88` (release-oracle repair merged; 2.2.0 / bridge 14)
 

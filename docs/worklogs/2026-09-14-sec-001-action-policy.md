@@ -1,10 +1,12 @@
-# SEC-001 central action-policy seam
+# [DONE][SEC-001] Central Action-Policy Seam
 
 **Owner:** Repository maintainer
 
 **Branch:** `feat/sec-001-action-policy`
 
 **Audit ID:** SEC-001
+
+**State:** `DONE`
 
 **Base:** `e36d78e` (FS-001 + repository CodeRabbit policy + REL-001 release-oracle repair; 2.2.0 / bridge 14)
 
