@@ -48,7 +48,7 @@ For security- or durability-sensitive PRs, the maintainer performs an explicit *
 
 ### AI-worker rules
 
-The maintainer may use up to **four direct development subagents concurrently** when the work genuinely decomposes. Nested delegation is prohibited. Every worker receives:
+The maintainer may use up to **seven direct development subagents concurrently** when the work genuinely decomposes. Nested delegation is prohibited. Every worker receives:
 
 - the exact project and base commit;
 - one concrete question or implementation slice;
@@ -72,13 +72,51 @@ The goal is deterministic progress without hidden stacks or merge-conflict queue
 7. Before merge, the maintainer reviews the **exact final pushed SHA** and leaves a GitHub comment recording the security/durability checklist where applicable, changed semantic owners, validation evidence and known residual risk. If a new commit is pushed afterward, repeat that self-review on the new SHA.
 8. Merge only after dependencies are satisfied, required hosted checks are green and substantive CodeRabbit findings on the final head are resolved or explicitly dispositioned. Prefer one coherent squashed/rebased commit per PR unless preserving contributor authorship requires a different history shape.
 
-Recommended branch names:
+### Work-item, state and PR naming standard
+
+The remediation roadmap uses a stable work-item identity that is separate from GitHub's immutable
+pull-request number. Never use `PR-03`, `PR-17`, or another planned PR number as the task identity.
 
 ```text
-fix/rel-001-schema-budget
-feat/sec-001-action-policy
-fix/bridge-lifecycle-fence
-fix/goal-durable-debt
+Work item: RMD-###
+PR title:  [RMD-###][STATE][AREA] Short imperative title
+Branch:    rmd/###-<area>-<short-slug>
+```
+
+Example:
+
+```text
+[RMD-004][REVIEW][SEC] Enforce exact Desktop Principal
+rmd/004-sec-exact-desktop-principal
+```
+
+State vocabulary is fixed:
+
+| State | Meaning |
+| --- | --- |
+| `DONE` | merged to `main` and verified at the claimed evidence level |
+| `ACTIVE` | the one work item currently receiving implementation changes |
+| `REVIEW` | implementation is complete; exact head is in self-review/CodeRabbit/hosted CI |
+| `READY` | next serial item; may start only after the current `ACTIVE`/`REVIEW` item is `DONE` |
+| `QUEUED` | ordered future item whose technical dependencies are satisfied or not yet relevant |
+| `BLOCKED` | an explicit technical dependency or external prerequisite is not yet satisfied |
+
+Area codes stay short and map to the audit vocabulary: `SEC`, `REL`, `ID`, `BRG`, `WS`, `GH`,
+`GOAL`, `PLUG`, `EXT`, `AG`, `PLATFORM`, `OBS`, `SUP`, `CI`, `DOC`, or `FS`. A PR body starts
+with `Work item`, `State`, `Area`, `Audit IDs`, `Depends on`, and `Blocks` where applicable.
+GitHub's `#<number>` remains only the hosting-system identifier/link; it never determines program
+order or dependency identity.
+
+Use the branch convention for new work starting with RMD-005. Do not rename an already-open branch
+solely for cosmetic consistency; the current RMD-004 branch is grandfathered until it merges.
+
+Recommended future branch names:
+
+```text
+rmd/005-id-durable-request-session-fence
+rmd/006-sec-restricted-desktop-defaults
+rmd/008-brg-lifecycle-generation
+rmd/012-goal-reply-debt
 ```
 
 ## 4. Dependency map
@@ -87,42 +125,42 @@ The graph below records technical dependencies only. It does **not** authorize p
 
 ```mermaid
 flowchart TD
-    P01[PR-01 Release oracle] --> P06[PR-06 CI shared-state fixes]
-    P02[PR-02 Action-policy seam] --> P03[PR-03 Exact Desktop Principal]
-    P03 --> P05[PR-05 Restricted/Desktop defaults]
-    P02 --> P09[PR-09 WorkspaceLease]
-    P04[PR-04 Correlation + session deletion] --> P09
-    P02 --> P10[PR-10 Typed GitHub integration]
+    R001[RMD-001 Release oracle] --> R007[RMD-007 CI shared-state fixes]
+    R002[RMD-002 Action-policy seam] --> R004[RMD-004 Exact Desktop Principal]
+    R004 --> R006[RMD-006 Restricted/Desktop defaults]
+    R002 --> R010[RMD-010 WorkspaceLease]
+    R005[RMD-005 Correlation + session deletion] --> R010
+    R002 --> R011[RMD-011 Typed GitHub integration]
 
-    P07[PR-07 Bridge lifecycle fence] --> P08[PR-08 Final repair claims]
-    P12[PR-12 Goal debt foundations] --> P13[PR-13 Goal control store]
-    P13 --> P14[PR-14 Continuation debt transfer]
-    P14 --> P15[PR-15 Goal helper isolation]
+    R008[RMD-008 Bridge lifecycle fence] --> R009[RMD-009 Final repair claims]
+    R012[RMD-012 Goal debt foundations] --> R013[RMD-013 Goal control store]
+    R013 --> R014[RMD-014 Continuation debt transfer]
+    R014 --> R015[RMD-015 Goal helper isolation]
 
-    P16[PR-16 Plugin refresh lease] --> P18[PR-18 Playwright parity]
-    P18 --> P19[PR-19 Memory lifecycle acceptance]
-    P19 --> P20[PR-20 Plugin health chain]
+    R016[RMD-016 Plugin refresh lease] --> R018[RMD-018 Playwright parity]
+    R018 --> R019[RMD-019 Memory lifecycle acceptance]
+    R019 --> R020[RMD-020 Plugin health chain]
 
-    P08 --> P21[PR-21 Extension provider adapters]
-    P15 --> P21
-    P16 --> P21
-    P21 --> P22[PR-22 Main-side orchestration]
+    R009 --> R021[RMD-021 Extension provider adapters]
+    R015 --> R021
+    R016 --> R021
+    R021 --> R022[RMD-022 Main-side orchestration]
 
-    P05 --> P24[PR-24 Remove paused macOS runtime]
-    P20 --> P26[PR-26 Diagnostics page]
-    P15 --> P26
-    P21 --> P26
+    R006 --> R024[RMD-024 Remove paused macOS runtime]
+    R020 --> R027[RMD-027 Diagnostics page]
+    R015 --> R027
+    R021 --> R027
 ```
 
-## 5. Pull-request queue and merge order
+## 5. Work-item queue and merge order
 
-The queue below is the authoritative implementation order. The maintainer completes and merges one implementation PR before beginning production changes for the next. Existing completed items stay recorded at their original PR numbers; dependency arrows still explain *why* an item cannot move earlier.
+The queue below is the authoritative implementation order. The maintainer completes and merges one implementation PR before beginning production changes for the next. `RMD-###` is the stable work-item identity; GitHub PR numbers are not used for ordering. Dependency arrows still explain *why* an item cannot move earlier.
 
 ### Stage 0 — establish a trustworthy oracle and the policy seam
 
-These foundation PRs were completed before the single-maintainer operating-model revision. Their original numbering is retained so audit references and merged history remain stable.
+These foundation work items were completed before the single-maintainer operating-model revision. Their audit IDs and Git history remain unchanged; only the roadmap identity is standardized here.
 
-#### PR-01 — deterministic release-oracle repairs
+#### [RMD-001][DONE][REL] — deterministic release-oracle repairs
 
 **Owner:** Repository maintainer
 **Audit IDs:** REL-001, TEST-001, MCP-001 first tranche
@@ -143,12 +181,12 @@ Exit evidence:
 - schema size is reported in the test failure when it regresses;
 - no production locale behavior is forced to a particular grouping convention.
 
-#### PR-02 — central action-policy seam, behavior preserving
+#### [RMD-002][DONE][SEC] — central action-policy seam, behavior preserving
 
 **Owner:** Repository maintainer
 **Audit ID:** SEC-001
 **Depends on:** none
-**Blocks:** PR-03, PR-05, PR-09, PR-10
+**Blocks:** RMD-004, RMD-006, RMD-010, RMD-011
 
 Scope:
 
@@ -166,14 +204,23 @@ Exit evidence:
 - representative Core and Desktop actions demonstrably pass through one policy seam;
 - no adapter can silently construct a second policy vocabulary for the same action class.
 
+#### [RMD-003][DONE][FS] — filesystem no-follow symlink metadata boundary
+
+**Owner:** Repository maintainer
+**Audit ID:** FS-001
+**Depends on:** none
+**Status/role:** completed early before the single-maintainer renumbering; retained as the third work item in actual execution order
+
+Scope: classify a directory symlink with `lstat`/dirent and skip it before target `stat` when no-follow is selected.
+
 ### Stage 1 — close the P0 authority gaps and stabilize stateful CI
 
-#### PR-03 — exact Principal on every Desktop mutation
+#### [RMD-004][REVIEW][SEC] — exact Principal on every Desktop mutation
 
 **Owner:** Repository maintainer
 **Audit IDs:** SEC-002, SEC-003
-**Depends on:** PR-02
-**Blocks:** PR-05
+**Depends on:** RMD-002
+**Blocks:** RMD-006
 
 Scope:
 
@@ -190,12 +237,12 @@ unattributed disabled + every mutation class → DENY
 known exact Principal + capability enabled → existing behavior
 ```
 
-#### PR-04 — durable request ownership and session deletion fencing
+#### [RMD-005][READY][ID] — durable request ownership and session deletion fencing
 
 **Owner:** Repository maintainer
 **Audit IDs:** ID-001, SES-001
 **Depends on:** none
-**Enables:** PR-09's durable lease integration
+**Enables:** RMD-010's durable lease integration
 
 Scope:
 
@@ -209,12 +256,12 @@ Required regressions:
 - ownership survives pressure beyond the former 50,000-entry bound;
 - paused reconstruction → delete → resume cannot recreate a directory, catalog row or open session.
 
-#### PR-05 — restricted Desktop, least-privilege defaults and truthful permission UX
+#### [RMD-006][BLOCKED][SEC] — restricted Desktop, least-privilege defaults and truthful permission UX
 
 **Owner:** Repository maintainer
 **Audit IDs:** SEC-004, SEC-005, SEC-006, SEC-007
-**Depends on:** PR-03
-**Blocks:** PR-24 macOS runtime deletion if shared Desktop setup files overlap
+**Depends on:** RMD-004
+**Blocks:** RMD-024 macOS runtime deletion if shared Desktop setup files overlap
 
 Scope:
 
@@ -238,12 +285,12 @@ fresh install
 → no silent full-session authority
 ```
 
-#### PR-06 — aggregate-suite contamination and timing repair
+#### [RMD-007][QUEUED][CI] — aggregate-suite contamination and timing repair
 
 **Owner:** Repository maintainer
 **Audit ID:** CI-001
-**Depends on:** PR-01
-**Linear position:** after PR-05 in the single-maintainer queue
+**Depends on:** RMD-001
+**Linear position:** after RMD-006 in the single-maintainer queue
 
 Scope:
 
@@ -259,12 +306,12 @@ Exit evidence:
 
 ### Stage 2 — browser lifecycle, workspace authority and typed remote actions
 
-#### PR-07 — bridge lifecycle generation around browser delivery
+#### [RMD-008][QUEUED][BRG] — bridge lifecycle generation around browser delivery
 
 **Owner:** Repository maintainer
 **Audit ID:** BRG-001
 **Depends on:** Stage 0 baseline only
-**Blocks:** PR-08
+**Blocks:** RMD-009
 
 Scope:
 
@@ -275,12 +322,12 @@ Scope:
 
 Required regression: pause lease persistence, initiate shutdown, release persistence, prove no browser side effect occurs.
 
-#### PR-08 — final authority claim for every repair
+#### [RMD-009][BLOCKED][BRG] — final authority claim for every repair
 
 **Owner:** Repository maintainer
 **Audit ID:** BRG-002
-**Depends on:** PR-07
-**Blocks:** PR-21
+**Depends on:** RMD-008
+**Blocks:** RMD-021
 
 Scope:
 
@@ -288,12 +335,12 @@ Scope:
 - include silence, assistant-error, compaction and Goal repairs, not only attribution recovery;
 - revoke safely when block/stop/supersession/current-work changes during inspection.
 
-#### PR-09 — durable WorkspaceLease
+#### [RMD-010][BLOCKED][WS] — durable WorkspaceLease
 
 **Owner:** Repository maintainer
 **Audit ID:** WS-001
-**Depends on:** PR-02 and PR-04
-**Linear position:** after PR-08 in the single-maintainer queue
+**Depends on:** RMD-002 and RMD-005
+**Linear position:** after RMD-009 in the single-maintainer queue
 
 Scope:
 
@@ -304,11 +351,11 @@ Scope:
 
 Regression: two primes/two projects plus reused worker labels cannot cross leases.
 
-#### PR-10 — typed GitHub remote integration
+#### [RMD-011][BLOCKED][GH] — typed GitHub remote integration
 
 **Owner:** Repository maintainer
 **Audit ID:** GH-001
-**Depends on:** PR-02; merge after PR-05 so remote mutation follows final policy vocabulary
+**Depends on:** RMD-002; merge after RMD-006 so remote mutation follows final policy vocabulary
 
 Scope:
 
@@ -317,21 +364,12 @@ Scope:
 - route remote mutations through `remote-mutate` policy decisions;
 - eliminate the product need to open a visible Desktop terminal merely to run `gh`.
 
-#### PR-11 — filesystem no-follow symlink metadata boundary
-
-**Owner:** Repository maintainer
-**Audit ID:** FS-001
-**Depends on:** none
-**Status/role:** already completed as an independent early hardening item; no longer used as fallback work
-
-Scope: classify a directory symlink with `lstat`/dirent and skip it before target `stat` when no-follow is selected.
-
-#### PR-12 — Goal reply-debt foundations
+#### [RMD-012][QUEUED][GOAL] — Goal reply-debt foundations
 
 **Owner:** Repository maintainer
 **Audit IDs:** GOAL-001, GOAL-002
-**Depends on:** no Goal refactor parent; schedule after PR-08 if bridge overlap is high
-**Blocks:** PR-13
+**Depends on:** no Goal refactor parent; schedule after RMD-009 if bridge overlap is high
+**Blocks:** RMD-013
 
 Scope:
 
@@ -343,66 +381,66 @@ Scope:
 
 Goal PRs are deliberately contiguous because they share one durable control plane. Plugin PRs follow in the same linear program where they touch the same manager/extension refresh lifecycle.
 
-#### PR-13 — transactional Goal control store
+#### [RMD-013][BLOCKED][GOAL] — transactional Goal control store
 
 **Owner:** Repository maintainer
 **Audit ID:** GOAL-003
-**Depends on:** PR-12
-**Blocks:** PR-14, PR-15
+**Depends on:** RMD-012
+**Blocks:** RMD-014, RMD-015
 
 Create one serialized semantic transaction owner for objectives, switches and reply obligations. Publish in-memory state only after the durable semantic commit or use an explicit WAL/generation with deterministic recovery.
 
-#### PR-14 — continuation Goal debt disposition
+#### [RMD-014][BLOCKED][GOAL] — continuation Goal debt disposition
 
 **Owner:** Repository maintainer
 **Audit ID:** GOAL-004
-**Depends on:** PR-13
-**Blocks:** PR-15
+**Depends on:** RMD-013
+**Blocks:** RMD-015
 
 Make A→B continuation commit explicitly supersede or transfer source reply debt atomically rather than leaving a live-looking but uncollectable A obligation.
 
-#### PR-15 — isolate Goal helper Temporary Chats from user targets
+#### [RMD-015][BLOCKED][GOAL] — isolate Goal helper Temporary Chats from user targets
 
 **Owner:** Repository maintainer
 **Audit ID:** GOAL-005
-**Depends on:** PR-14
-**Blocks:** PR-21, PR-26
+**Depends on:** RMD-014
+**Blocks:** RMD-021, RMD-027
 
 Separate `GoalControlProvider`, `UserChatTargetAllocator`, debt and delivery roles. ChatGPT helper tabs get their own identity/health pool and can never be ordinary user-target candidates. Failures identify helper unavailability rather than looking like New Chat placement failure.
 
-#### PR-16 — plugin refresh lease vs actual click attempt
+#### [RMD-016][QUEUED][PLUG] — plugin refresh lease vs actual click attempt
 
 **Owner:** Repository maintainer
 **Audit ID:** PLUG-001
-**Depends on:** none technically; scheduled after PR-15 by the linear queue
-**Blocks:** PR-21
+**Depends on:** none technically; scheduled after RMD-015 by the linear queue
+**Blocks:** RMD-021
 
 Use explicit `pending → leased → clicking → verifying → complete/manual-required` semantics. A proved zero-click precondition failure releases the lease instead of permanently consuming the attempt.
 
-#### PR-17 — exact npm plugin installation root
+#### [RMD-017][QUEUED][PLUG] — exact npm plugin installation root
 
 **Owner:** Repository maintainer
 **Audit ID:** PLUG-004
 **Depends on:** none
-**Linear position:** after PR-16 in the single-maintainer queue
+**Linear position:** after RMD-016 in the single-maintainer queue
 
 Force an explicit plugin generation project root/prefix and verify install output cannot walk to an ancestor package root. Add the nested-parent-package regression from the audit.
 
-#### PR-18 — Playwright production/test parity
+#### [RMD-018][BLOCKED][PLUG] — Playwright production/test parity
 
 **Owner:** Repository maintainer
 **Audit ID:** PLUG-002
-**Depends on:** PR-16 if shared readiness/refresh states are touched
-**Blocks:** PR-19
+**Depends on:** RMD-016 if shared readiness/refresh states are touched
+**Blocks:** RMD-019
 
 Choose and document one production browser contract, then make the live test use that exact install/provisioning/launch recipe with no test-only browser repair or extra flags.
 
-#### PR-19 — Memory production lifecycle acceptance
+#### [RMD-019][BLOCKED][PLUG] — Memory production lifecycle acceptance
 
 **Owner:** Repository maintainer
 **Audit ID:** PLUG-003
-**Depends on:** PR-18 production plugin harness
-**Blocks:** PR-20's health UI claims
+**Depends on:** RMD-018 production plugin harness
+**Blocks:** RMD-020's health UI claims
 
 Acceptance sequence:
 
@@ -421,68 +459,77 @@ install
 
 Do not change the stable Memory data path unless this test produces evidence requiring it.
 
-#### PR-20 — plugin health chain and diagnostics signals
+#### [RMD-020][BLOCKED][PLUG] — plugin health chain and diagnostics signals
 
 **Owner:** Repository maintainer
 **Audit ID:** PLUG-005
-**Depends on:** PR-19 so the health vocabulary reflects proven production stages
-**Blocks:** PR-26
+**Depends on:** RMD-019 so the health vocabulary reflects proven production stages
+**Blocks:** RMD-027
 
 Expose installation, local server connection, app/editor probe, local schema revision, provider connector schema, current-chat declaration and last probe separately. A single enabled/green state must not imply the entire chain is healthy.
 
 ### Stage 4 — decomposition and secondary hardening
 
-#### PR-21 — provider-private extension adapters
+#### [RMD-021][BLOCKED][EXT] — provider-private extension adapters
 
 **Owner:** Repository maintainer
 **Audit ID:** EXT-001
-**Depends on:** PR-08, PR-15, PR-16
-**Blocks:** PR-22, PR-26
+**Depends on:** RMD-009, RMD-015, RMD-016
+**Blocks:** RMD-022, RMD-027
 
 Split conversation, composer, model-picker, Temporary Chat, Plugins settings and sidebar contracts behind explicit `supported/degraded/unavailable` adapter health. Preserve existing browser receipts/identity fences.
 
-#### PR-22 — move durable orchestration authority main-side
+#### [RMD-022][BLOCKED][EXT] — move durable orchestration authority main-side
 
 **Owner:** Repository maintainer
 **Audit ID:** EXT-002
-**Depends on:** PR-21
+**Depends on:** RMD-021
 
 Move durable workflow state out of provider-private DOM owners where possible. The extension should observe/perform bounded provider actions; the main process should own durable intent and generation state.
 
-#### PR-23 — agent lookup and persistence efficiency
+#### [RMD-023][QUEUED][AG] — agent lookup and persistence efficiency
 
 **Owner:** Repository maintainer
 **Audit IDs:** AG-001, AG-002
-**Depends on:** none technically; scheduled after PR-22 by the linear queue
+**Depends on:** none technically; scheduled after RMD-022 by the linear queue
 
 Add a validated dormant `conversationId → owner` reverse index and use lazy debounced swarm snapshot materialization while retaining immediate durable acceptance barriers.
 
-#### PR-24 — remove paused macOS runtime/helper/tests
+#### [RMD-024][BLOCKED][PLATFORM] — remove paused macOS runtime/helper/tests
 
 **Owner:** Repository maintainer
 **Audit ID:** PLATFORM-002
-**Depends on:** PR-05 if shared Desktop capability/config/setup files overlap
+**Depends on:** RMD-006 if shared Desktop capability/config/setup files overlap
 
 The release matrix is already Windows/Linux. This PR removes the dormant macOS Desktop helper/addon, package preparation/seal/smoke scripts and mac-only tests while preserving generic Linux POSIX behavior.
 
-#### PR-25 — browser startup and localhost trust hardening
+#### [RMD-025][QUEUED][BRG] — remove passive app-show browser opening
 
-Split into two PRs if either side grows beyond reviewable scope.
+**Owner:** Repository maintainer
+**Audit ID:** BRG-003
+**Depends on:** none technically; scheduled after RMD-024 by the linear queue
 
-**PR-25a owner:** Repository maintainer — BRG-003, remove passive app-show browser opening; browser launch requires an explicit operation owner.
-**PR-25b owner:** Repository maintainer — BRG-004, document the same-user localhost pairing threat decision and, if in scope, implement native/OS-IPC or challenge-based hardening.
+Remove passive app-show browser opening; browser launch requires an explicit operation owner.
+
+#### [RMD-026][QUEUED][BRG] — localhost trust decision and hardening
+
+**Owner:** Repository maintainer
+**Audit ID:** BRG-004
+**Depends on:** none technically; scheduled after RMD-025 by the linear queue
+
+Document the same-user localhost pairing threat decision and, if in scope, implement native/OS-IPC or challenge-based hardening.
 
 `BRG-004` is allowed to end in an explicit documented threat-model decision before implementation if product requirements intentionally accept same-user local processes.
 
-#### PR-26 — content-free diagnostics page
+#### [RMD-027][BLOCKED][OBS] — content-free diagnostics page
 
 **Owner:** Repository maintainer
 **Audit ID:** OBS-001
-**Depends on:** PR-15, PR-20, PR-21 and stable Principal/lease vocabulary from PR-02/PR-09
+**Depends on:** RMD-015, RMD-020, RMD-021 and stable Principal/lease vocabulary from RMD-002/RMD-010
 
 Expose identity, workspace lease, Desktop mode/helper generation, plugin health chain, Goal debt/provider/target state and extension adapter health without message/file/clipboard/screenshot/secret content.
 
-#### PR-27 — independent update authenticity
+#### [RMD-028][QUEUED][SUP] — independent update authenticity
 
 **Owner:** Repository maintainer
 **Audit ID:** SUP-001
@@ -490,7 +537,7 @@ Expose identity, workspace lease, Desktop mode/helper generation, plugin health 
 
 Implement signer verification and signed-manifest/trust-root support appropriate for Windows automatic execution while preserving SHA-256 corruption checks. If signing credentials are not yet available, code/test the verification path and keep automatic execution policy honest until infrastructure is provisioned.
 
-#### PR-28 — final release-oracle hardening
+#### [RMD-029][BLOCKED][CI/DOC] — final release-oracle hardening
 
 **Owner:** Repository maintainer
 **Audit IDs:** CI-001 completion, DOC-001
@@ -519,7 +566,7 @@ The maintainer repeats this operating loop:
 1. fetch/sync current `main` and read this program's current queue;
 2. take the first unmerged PR in the serial queue whose technical dependencies are satisfied and note them in the branch/PR description;
 3. inspect current source/callers/tests before modifying anything;
-4. delegate bounded slices to AI workers when useful, with a maximum of four direct workers and no nested delegation;
+4. delegate bounded slices to AI workers when useful, with a maximum of seven direct workers and no nested delegation;
 5. keep one human semantic owner for the PR and resolve worker overlaps before integration;
 6. run focused tests while iterating;
 7. inspect the full diff, run the required subsystem gate, then open/update the PR;
@@ -616,77 +663,77 @@ No new high-authority feature work should bypass this gate.
 
 ## 11. Single-maintainer serial task board
 
-The following order is authoritative unless a newly reproduced dependency forces this document to be revised. “Completed” items are kept in place for history; the next implementation always starts from current `main` only after the previous active implementation PR is merged.
+The following order is authoritative unless a newly reproduced dependency forces this document to be revised. `State` uses the vocabulary in §3. The next implementation always starts from current `main` only after the current `ACTIVE`/`REVIEW` item is `DONE`.
 
-| Order | PR | Purpose | State at 2026-09-15 revision |
-| ---: | --- | --- | --- |
-| 1 | PR-01 | REL-001 / TEST-001 / MCP-001 release-oracle repair | completed |
-| 2 | PR-02 | SEC-001 central action-policy seam | completed |
-| 3 | PR-11 | FS-001 no-follow symlink metadata boundary | completed early; retained historical number |
-| 4 | **PR-03** | SEC-002 / SEC-003 exact Desktop Principal | **active; finish, self-review exact SHA, merge first** |
-| 5 | PR-04 | ID-001 / SES-001 durable request ownership + session deletion fencing | next |
-| 6 | PR-05 | SEC-004..007 restricted Desktop + least-privilege defaults | after PR-04; technical dependency remains PR-03 |
-| 7 | PR-06 | CI-001 aggregate-suite contamination/timing repair | after PR-05 |
-| 8 | PR-07 | BRG-001 bridge lifecycle generation | after PR-06 |
-| 9 | PR-08 | BRG-002 final repair authority claim | after PR-07 |
-| 10 | PR-09 | WS-001 durable WorkspaceLease | after PR-08; requires PR-02 + PR-04 |
-| 11 | PR-10 | GH-001 typed GitHub remote integration | after PR-09; requires PR-02 and final PR-05 policy vocabulary |
-| 12 | PR-12 | GOAL-001 / GOAL-002 reply-debt foundations | after PR-10 |
-| 13 | PR-13 | GOAL-003 transactional Goal control store | after PR-12 |
-| 14 | PR-14 | GOAL-004 continuation debt disposition | after PR-13 |
-| 15 | PR-15 | GOAL-005 helper Temporary Chat isolation | after PR-14 |
-| 16 | PR-16 | PLUG-001 refresh lease vs click attempt | after PR-15 |
-| 17 | PR-17 | PLUG-004 exact npm plugin installation root | after PR-16 |
-| 18 | PR-18 | PLUG-002 Playwright production/test parity | after PR-17; requires PR-16 if shared readiness state changes |
-| 19 | PR-19 | PLUG-003 Memory production lifecycle acceptance | after PR-18 |
-| 20 | PR-20 | PLUG-005 plugin health chain + diagnostics signals | after PR-19 |
-| 21 | PR-21 | EXT-001 provider-private extension adapters | after PR-20; requires PR-08 + PR-15 + PR-16 |
-| 22 | PR-22 | EXT-002 move durable orchestration main-side | after PR-21 |
-| 23 | PR-23 | AG-001 / AG-002 agent lookup + persistence efficiency | after PR-22 |
-| 24 | PR-24 | PLATFORM-002 remove paused macOS runtime/helper/tests | after PR-23; requires PR-05 where shared Desktop files overlap |
-| 25 | PR-25a | BRG-003 passive app-show browser opening removal | after PR-24 |
-| 26 | PR-25b | BRG-004 localhost trust decision/hardening | after PR-25a |
-| 27 | PR-26 | OBS-001 content-free diagnostics page | after PR-25b; requires PR-09 + PR-15 + PR-20 + PR-21 |
-| 28 | PR-27 | SUP-001 independent update authenticity | after PR-26 |
-| 29 | PR-28 | CI-001 completion + DOC-001 final release-oracle hardening | final implementation/release-hardening PR |
+| Seq | Work item | Area | State | Scope | Depends on / gate |
+| ---: | --- | --- | --- | --- | --- |
+| 001 | RMD-001 | REL | `DONE` | release-oracle/schema/locale repairs | none |
+| 002 | RMD-002 | SEC | `DONE` | central action-policy seam | none |
+| 003 | RMD-003 | FS | `DONE` | no-follow symlink metadata boundary | none |
+| 004 | **RMD-004** | SEC | **`REVIEW`** | exact Desktop Principal | RMD-002 |
+| 005 | **RMD-005** | ID | **`READY`** | durable request ownership + session deletion fencing | serial gate: RMD-004 must become `DONE` |
+| 006 | RMD-006 | SEC | `BLOCKED` | restricted Desktop + least-privilege defaults | RMD-004 |
+| 007 | RMD-007 | CI | `QUEUED` | aggregate-suite contamination/timing repair | RMD-001; scheduled after RMD-006 |
+| 008 | RMD-008 | BRG | `QUEUED` | bridge lifecycle generation | Stage 0 baseline; scheduled after RMD-007 |
+| 009 | RMD-009 | BRG | `BLOCKED` | final repair authority claim | RMD-008 |
+| 010 | RMD-010 | WS | `BLOCKED` | durable WorkspaceLease | RMD-002 + RMD-005; scheduled after RMD-009 |
+| 011 | RMD-011 | GH | `BLOCKED` | typed GitHub remote integration | RMD-002 + final RMD-006 policy vocabulary |
+| 012 | RMD-012 | GOAL | `QUEUED` | reply-debt foundations | scheduled after RMD-011/RMD-009 |
+| 013 | RMD-013 | GOAL | `BLOCKED` | transactional Goal control store | RMD-012 |
+| 014 | RMD-014 | GOAL | `BLOCKED` | continuation debt disposition | RMD-013 |
+| 015 | RMD-015 | GOAL | `BLOCKED` | helper Temporary Chat isolation | RMD-014 |
+| 016 | RMD-016 | PLUG | `QUEUED` | refresh lease vs click attempt | scheduled after RMD-015 |
+| 017 | RMD-017 | PLUG | `QUEUED` | exact npm installation root | scheduled after RMD-016 |
+| 018 | RMD-018 | PLUG | `BLOCKED` | Playwright production/test parity | RMD-016 if shared readiness state changes; after RMD-017 |
+| 019 | RMD-019 | PLUG | `BLOCKED` | Memory production lifecycle acceptance | RMD-018 |
+| 020 | RMD-020 | PLUG | `BLOCKED` | plugin health chain + diagnostics signals | RMD-019 |
+| 021 | RMD-021 | EXT | `BLOCKED` | provider-private extension adapters | RMD-009 + RMD-015 + RMD-016 |
+| 022 | RMD-022 | EXT | `BLOCKED` | move durable orchestration main-side | RMD-021 |
+| 023 | RMD-023 | AG | `QUEUED` | agent lookup + persistence efficiency | scheduled after RMD-022 |
+| 024 | RMD-024 | PLATFORM | `BLOCKED` | remove paused macOS runtime/helper/tests | RMD-006 where shared Desktop files overlap |
+| 025 | RMD-025 | BRG | `QUEUED` | passive app-show browser opening removal | scheduled after RMD-024 |
+| 026 | RMD-026 | BRG | `QUEUED` | localhost trust decision/hardening | scheduled after RMD-025 |
+| 027 | RMD-027 | OBS | `BLOCKED` | content-free diagnostics page | RMD-010 + RMD-015 + RMD-020 + RMD-021 |
+| 028 | RMD-028 | SUP | `QUEUED` | independent update authenticity | external signing infrastructure may gate production completion |
+| 029 | RMD-029 | CI/DOC | `BLOCKED` | final release-oracle hardening | major state-machine work merged |
 
 This is a **one-implementation-PR-at-a-time** program. Parallelism is limited to bounded AI investigation inside the current PR or read-only preparation for later work. There is no second human lane, no counterpart-review gate, no fallback coding branch, and no stacked implementation queue.
 
 ## 12. Backlog coverage
 
-The plan maps every audit backlog item to a PR or explicit decision point:
+The plan maps every audit backlog item to a stable remediation work item or explicit decision point:
 
-| Audit ID | Planned PR |
+| Audit ID | Work item |
 | --- | --- |
-| SEC-001 | PR-02 |
-| SEC-002, SEC-003 | PR-03 |
-| SEC-004, SEC-005, SEC-006, SEC-007 | PR-05 |
-| ID-001, SES-001 | PR-04 |
-| BRG-001 | PR-07 |
-| BRG-002 | PR-08 |
-| BRG-003 | PR-25a |
-| BRG-004 | PR-25b |
-| GOAL-001, GOAL-002 | PR-12 |
-| GOAL-003 | PR-13 |
-| GOAL-004 | PR-14 |
-| GOAL-005 | PR-15 |
-| PLUG-001 | PR-16 |
-| PLUG-002 | PR-18 |
-| PLUG-003 | PR-19 |
-| PLUG-004 | PR-17 |
-| PLUG-005 | PR-20 |
-| GH-001 | PR-10 |
-| CI-001 | PR-06, PR-28 |
-| REL-001, MCP-001, TEST-001 | PR-01 |
-| SUP-001 | PR-27 |
-| EXT-001 | PR-21 |
-| EXT-002 | PR-22 |
+| SEC-001 | RMD-002 |
+| SEC-002, SEC-003 | RMD-004 |
+| SEC-004, SEC-005, SEC-006, SEC-007 | RMD-006 |
+| ID-001, SES-001 | RMD-005 |
+| BRG-001 | RMD-008 |
+| BRG-002 | RMD-009 |
+| BRG-003 | RMD-025 |
+| BRG-004 | RMD-026 |
+| GOAL-001, GOAL-002 | RMD-012 |
+| GOAL-003 | RMD-013 |
+| GOAL-004 | RMD-014 |
+| GOAL-005 | RMD-015 |
+| PLUG-001 | RMD-016 |
+| PLUG-002 | RMD-018 |
+| PLUG-003 | RMD-019 |
+| PLUG-004 | RMD-017 |
+| PLUG-005 | RMD-020 |
+| GH-001 | RMD-011 |
+| CI-001 | RMD-007, RMD-029 |
+| REL-001, MCP-001, TEST-001 | RMD-001 |
+| SUP-001 | RMD-028 |
+| EXT-001 | RMD-021 |
+| EXT-002 | RMD-022 |
 | PLATFORM-001 | already completed on the 2.2.0 public baseline; keep covered by packaging tests |
-| PLATFORM-002 | PR-24 |
-| FS-001 | PR-11 |
-| AG-001, AG-002 | PR-23 |
-| WS-001 | PR-09 |
-| OBS-001 | PR-26 |
-| DOC-001 | PR-28 |
+| PLATFORM-002 | RMD-024 |
+| FS-001 | RMD-003 |
+| AG-001, AG-002 | RMD-023 |
+| WS-001 | RMD-010 |
+| OBS-001 | RMD-027 |
+| DOC-001 | RMD-029 |
 
 If a future reproduction disproves an audit item, close it by adding the proof/test to the appropriate PR or by documenting the non-finding here. Do not preserve work merely because it appeared in the audit.

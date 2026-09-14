@@ -1,17 +1,21 @@
-# SEC-002 / SEC-003 exact Desktop Principal
+# RMD-004 [REVIEW] — SEC-002 / SEC-003 exact Desktop Principal
 
 **Owner:** Repository maintainer
 
 **Branch:** `feat/sec-002-exact-desktop-principal`
 
-**Program item:** PR-03
+**Program item:** RMD-004
+
+**State:** `REVIEW`
+
+**Area:** `SEC`
 
 **Base:** `e3515a3` (SEC-001 central action-policy seam + FS-001 + repository review/release gates; 2.2.0 / bridge 14)
 
 ## Task
 
 Close the Desktop attribution gaps identified by SEC-002 and SEC-003 without changing the
-Desktop product tier/defaults planned for PR-05 or introducing PR-09 WorkspaceLease semantics.
+Desktop product tier/defaults planned for RMD-006 or introducing RMD-010 WorkspaceLease semantics.
 Every model-facing Desktop mutation, application/process launch and clipboard operation must be
 authorized for the exact companion request/chat/session Principal before irreversible work begins.
 
@@ -24,7 +28,7 @@ caller-local observation state.
 
 `Allow unattributed calls` remains a product setting for eligible self-contained calls such as
 Core file work and bounded JavaScript. It does not grant global Desktop mutation, application
-launch or clipboard authority. PR-05 still owns first-launch defaults and the restricted-vs-full
+launch or clipboard authority. RMD-006 still owns first-launch defaults and the restricted-vs-full
 Desktop product split.
 
 ## Authority invariant
@@ -60,8 +64,8 @@ browser-chord protections, native helper generations, live capability checks and
 
 - No change to first-launch capability or `allowUnattributedCalls` defaults.
 - No App Automation vs Full Computer Control product tier or command-equivalent terminal/Run
-  blocking; that is PR-05.
-- No WorkspaceLease or revocation-generation contract; that is PR-09.
+  blocking; that is RMD-006.
+- No WorkspaceLease or revocation-generation contract; that is RMD-010.
 - No removal of existing Desktop features or schemas.
 
 ## Validation
@@ -75,11 +79,11 @@ browser-chord protections, native helper generations, live capability checks and
 - `npm run verify:privacy` passed: public-history privacy gate clean on the local branch.
 - `git diff --check` passed.
 - A full local `npm run verify` reproduced the already-tracked CI-001 aggregate contamination:
-  6 failures among 4,431 tests, all outside the PR-03 authority paths. Each failing file then
+  6 failures among 4,431 tests, all outside the RMD-004 authority paths. Each failing file then
   passed independently (`code-mode-runtime` 14/14, `exec-hints` 118/118, `renderer-state`
   38/38, `session-finish` 28/28), so this PR does not hide or widen timeouts to make the
-  aggregate oracle look green. PR-06 remains the owner of that instability.
-- Independent PR-03 audit found no High/Medium merge blocker and confirmed that the Windows
+  aggregate oracle look green. RMD-007 remains the owner of that instability.
+- Independent RMD-004 audit found no High/Medium merge blocker and confirmed that the Windows
   observation-state/native generation owners remain unchanged below the central policy seam.
 - Hosted Linux/Windows CI and the repository maintainer's exact-final-SHA self-review are still
   required before merge and will be recorded on the pushed review head. CodeRabbit remains an
