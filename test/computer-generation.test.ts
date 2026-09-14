@@ -144,6 +144,80 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.children).toHaveLength(1);
   });
 
+  it('binds retained frames and refs to the observing session/conversation owner', async () => {
+    const ownerA = 'session:artifact-session:chat:artifact-chat-a';
+    const foreignOwners = [
+      'session:artifact-session:chat:artifact-chat-b',
+      'session:other-artifact-session:chat:artifact-chat-a'
+    ];
+    const state = await computer.getWindowState({ window: 77, artifactOwner: ownerA });
+    const ref = state.elements[0]!.ref;
+    const frameId = state.screenshot!.frameId;
+    const sent = fake.requests.length;
+
+    for (const foreignOwner of foreignOwners) {
+      await expect(
+        computer.act([{ type: 'click_ref', ref }], { artifactOwner: foreignOwner })
+      ).rejects.toThrow(/UNKNOWN_UI_REF/);
+      await expect(
+        computer.act([{ type: 'click', x: 10, y: 10 }], { frameId, artifactOwner: foreignOwner })
+      ).rejects.toThrow(/STALE_FRAME/);
+      await expect(
+        computer.actAndCapture([], {
+          frameId,
+          artifactOwner: foreignOwner,
+          capture: { crop: { x: 0, y: 0, width: 10, height: 10 } }
+        })
+      ).rejects.toThrow(/STALE_FRAME/);
+    }
+    expect(fake.requests).toHaveLength(sent);
+
+    await expect(
+      computer.act([{ type: 'click_ref', ref }], { artifactOwner: ownerA })
+    ).resolves.toMatchObject({ completedCount: 1 });
+    await expect(
+      computer.act([{ type: 'click', x: 10, y: 10 }], { frameId, artifactOwner: ownerA })
+    ).resolves.toMatchObject({ completedCount: 1 });
+    await expect(
+      computer.actAndCapture([], {
+        frameId,
+        artifactOwner: ownerA,
+        capture: { crop: { x: 0, y: 0, width: 10, height: 10 } }
+      })
+    ).resolves.toMatchObject({ screenshot: expect.objectContaining({ frameId: expect.any(Number) }) });
+  });
+
+  it('never upgrades unattributed observation artifacts into exact-caller mutation authority', async () => {
+    const exactOwner = 'session:exact-artifact-session:chat:exact-artifact-chat';
+    const state = await computer.getWindowState({ window: 77, artifactOwner: null });
+    const sent = fake.requests.length;
+
+    await expect(
+      computer.act([{ type: 'click_ref', ref: state.elements[0]!.ref }], { artifactOwner: exactOwner })
+    ).rejects.toThrow(/UNKNOWN_UI_REF/);
+    await expect(
+      computer.act(
+        [{ type: 'click', x: 10, y: 10 }],
+        { frameId: state.screenshot!.frameId, artifactOwner: exactOwner }
+      )
+    ).rejects.toThrow(/STALE_FRAME/);
+    expect(fake.requests).toHaveLength(sent);
+  });
+
+  it('does not project another caller frame into a foreign owner cursor result', async () => {
+    const ownerA = 'session:cursor-artifact-session:chat:cursor-artifact-chat-a';
+    const ownerB = 'session:cursor-artifact-session:chat:cursor-artifact-chat-b';
+    const state = await computer.getWindowState({ window: 77, artifactOwner: ownerA });
+
+    const result = await computer.act(
+      [{ type: 'type', text: 'foreign cursor must stay screen-only' }],
+      { artifactOwner: ownerB }
+    );
+
+    expect(state.screenshot).not.toBeNull();
+    expect(result.cursor).toMatchObject({ image: null, frameId: null, imageSize: null });
+  });
+
   it('keeps fractional scaled control edges inside the actual returned image', async () => {
     fake.overrides.geometry = true;
     const state = await computer.getWindowState({ window: 77 });

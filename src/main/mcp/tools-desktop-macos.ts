@@ -34,7 +34,7 @@ import {
 import { browserTabChord, isBrowserProcess } from '../computer/browser-chords.js';
 import { IdentityLostError } from '../agents.js';
 import { logInfo } from '../logger.js';
-import { noteCount, noteDetail } from './call-context.js';
+import { currentCall, noteCount, noteDetail } from './call-context.js';
 import {
   cropArg,
   assertCurrentCallLifecycle,
@@ -51,6 +51,20 @@ import {
 } from './kernel.js';
 
 const DEFAULT_WINDOW_RESULTS = 60;
+
+/**
+ * Observation artifacts survive across tool calls, so requestId cannot be their durable owner.
+ * Bind them to the exact local-session + conversation attachment instead. A later mutation still
+ * requires a fresh exact request Principal through policy/lifecycle preflight before any effect.
+ * Missing either stable identity component makes the observation unattributed and therefore
+ * unusable as mutation authority.
+ */
+function desktopArtifactOwner(): string | null {
+  const caller = currentCall()?.caller;
+  return caller?.sessionId && caller.conversationId
+    ? `session:${caller.sessionId}:chat:${caller.conversationId}`
+    : null;
+}
 
 /**
  * Refuses a keyboard chord that would manage a browser's tabs or windows.
@@ -289,7 +303,12 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
           }
 
           if (what === 'ui' && input.match) {
-            const result = await findUi({ window: target, query: input.match, maxResults: input.max_elements });
+            const result = await findUi({
+              window: target,
+              query: input.match,
+              maxResults: input.max_elements,
+              artifactOwner: desktopArtifactOwner()
+            });
             noteCount(result.elements.length);
             if (result.elements.length === 0) {
               return ok(prefix(waited, `No controls in window ${result.window} match "${input.match}".`));
@@ -320,7 +339,8 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
               maxWidth: input.max_width,
               maxElements: input.max_elements,
               includeScreenshot: wantsShot,
-              includeUi: true
+              includeUi: true,
+              artifactOwner: desktopArtifactOwner()
             });
           } catch (err) {
             // "There is no foreground window" is a real native desktop state — a
@@ -333,7 +353,10 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
             ) {
               throw err;
             }
-            const shot = await screenshot({ maxWidth: input.max_width });
+            const shot = await screenshot({
+              maxWidth: input.max_width,
+              artifactOwner: desktopArtifactOwner()
+            });
             return desktopImageResult(
               prefix(
                 waited,
@@ -618,6 +641,7 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
           const result = await actAndCapture(parsed, {
             frameId,
             beforeSideEffect: requireLiveAuthority,
+            artifactOwner: desktopArtifactOwner(),
             verify: parsedVerify,
             capture:
               wantsCapture

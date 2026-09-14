@@ -863,6 +863,8 @@ function runHelper(
 interface Frame {
   id: number;
   helperGeneration: number;
+  /** Stable exact caller attachment that observed this artifact; null means unattributed. */
+  artifactOwner: string | null;
   region: Rect;
   scale: number;
   width: number;
@@ -907,7 +909,7 @@ function exclusive<T>(task: () => Promise<T>): Promise<T> {
 }
 const uiRefs = new Map<
   string,
-  { window: number; runtimeKey: string; generation: number; snapshotId: number }
+  { window: number; runtimeKey: string; generation: number; snapshotId: number; artifactOwner: string | null }
 >();
 
 /**
@@ -916,9 +918,16 @@ const uiRefs = new Map<
  * outstanding ref is meaningless — and acting on one would click whatever now happens to
  * hold that id. Stamping the generation makes that detectable instead of silent.
  */
-function rememberUiRef(window: number, runtimeKey: string, index: number, snapshotId: number, generation: number): string {
+function rememberUiRef(
+  window: number,
+  runtimeKey: string,
+  index: number,
+  snapshotId: number,
+  generation: number,
+  artifactOwner: string | null
+): string {
   const ref = `g${generation}_s${snapshotId}_e${index + 1}`;
-  uiRefs.set(ref, { window, runtimeKey, generation, snapshotId });
+  uiRefs.set(ref, { window, runtimeKey, generation, snapshotId, artifactOwner });
   while (uiRefs.size > 1000) {
     const oldest = uiRefs.keys().next().value as string | undefined;
     if (!oldest) break;
@@ -927,9 +936,12 @@ function rememberUiRef(window: number, runtimeKey: string, index: number, snapsh
   return ref;
 }
 
-function uiTarget(ref: string): { window: number; runtimeKey: string; snapshotId: number } {
+function uiTarget(
+  ref: string,
+  artifactOwner: string | null | undefined = undefined
+): { window: number; runtimeKey: string; snapshotId: number } {
   const target = uiRefs.get(ref);
-  if (!target) {
+  if (!target || (artifactOwner !== undefined && target.artifactOwner !== artifactOwner)) {
     throw new ComputerError(
       `UNKNOWN_UI_REF: ${ref}. Call get_window_state or find_ui again and use a ref from that reply.`
     );
@@ -956,8 +968,18 @@ function qualifiedFrame(frame: Frame | null, generation = helperGeneration): Fra
   return frame && frame.helperGeneration === generation && isHelperGenerationActive(generation) ? frame : null;
 }
 
-function frameById(id: number | undefined): Frame | null {
-  return qualifiedFrame(id === undefined ? null : (frames.get(id) ?? null));
+function frameForArtifactOwner(
+  frame: Frame | null,
+  artifactOwner: string | null | undefined,
+  generation = helperGeneration
+): Frame | null {
+  const qualified = qualifiedFrame(frame, generation);
+  if (!qualified) return null;
+  return artifactOwner === undefined || qualified.artifactOwner === artifactOwner ? qualified : null;
+}
+
+function frameById(id: number | undefined, artifactOwner: string | null | undefined = undefined): Frame | null {
+  return frameForArtifactOwner(id === undefined ? null : (frames.get(id) ?? null), artifactOwner);
 }
 
 export async function listWindows(): Promise<{ windows: WindowInfo[]; screen: Rect }> {
@@ -991,8 +1013,9 @@ export async function findUi(opts: {
   query?: string;
   role?: string;
   maxResults?: number;
+  artifactOwner?: string | null;
 }): Promise<{ window: number; snapshotId: number; elements: UiElementInfo[]; accessibility?: AccessibilityContext }> {
-  return exclusive(() => findUiLocked(opts, lastFrame));
+  return exclusive(() => findUiLocked(opts, frameForArtifactOwner(lastFrame, opts.artifactOwner)));
 }
 
 /**
@@ -1005,6 +1028,7 @@ async function findUiLocked(
     query?: string;
     role?: string;
     maxResults?: number;
+    artifactOwner?: string | null;
   },
   frame: Frame | null,
   suppliedReply?: Record<string, any>
@@ -1018,7 +1042,7 @@ async function findUiLocked(
   };
   const reply = suppliedReply ?? (await runHelper(request));
   const replyGeneration = generationOfReply(reply);
-  frame = qualifiedFrame(frame, replyGeneration);
+  frame = frameForArtifactOwner(frame, opts.artifactOwner, replyGeneration);
   const raw = Array.isArray(reply['elements']) ? (reply['elements'] as Array<Record<string, any>>) : [];
   const snapshotId = Number(reply['snapshotId']);
   if (!Number.isInteger(snapshotId) || snapshotId < 1) {
@@ -1066,7 +1090,7 @@ async function findUiLocked(
     const runtimeKey = String(item['runtimeKey'] ?? '');
     return {
       ref: runtimeKey
-        ? rememberUiRef(windowId, runtimeKey, index, snapshotId, replyGeneration)
+        ? rememberUiRef(windowId, runtimeKey, index, snapshotId, replyGeneration, opts.artifactOwner ?? null)
         : `unavailable-${snapshotId}-${index + 1}`,
       name: String(item['name'] ?? ''),
       role: String(item['role'] ?? ''),
@@ -1101,6 +1125,7 @@ export async function getWindowState(opts: {
   includeScreenshot?: boolean;
   includeUi?: boolean;
   includeRelated?: boolean;
+  artifactOwner?: string | null;
 }): Promise<{
   window: WindowInfo;
   snapshotId: number | null;
@@ -1134,8 +1159,8 @@ export async function getWindowState(opts: {
       const value = reply['window'];
       const window = value && typeof value === 'object' ? (value as WindowInfo) : null;
       if (!window) throw new ComputerError('WINDOW_NOT_FOUND: no matching visible window is available');
-      const shot = file ? await screenshotFromReply(reply, file, window.id) : null;
-      const frame = shot ? frameById(shot.frameId) : null;
+      const shot = file ? await screenshotFromReply(reply, file, window.id, opts.artifactOwner ?? null) : null;
+      const frame = shot ? frameById(shot.frameId, opts.artifactOwner) : null;
       const unavailableValue = reply['uiUnavailable'];
       const uiUnavailable =
         unavailableValue && typeof unavailableValue === 'object'
@@ -1145,7 +1170,11 @@ export async function getWindowState(opts: {
             }
           : null;
       const found = includeUi && uiUnavailable === null
-        ? await findUiLocked({ window: window.id, maxResults: opts.maxElements ?? 60 }, frame, reply)
+        ? await findUiLocked({
+            window: window.id,
+            maxResults: opts.maxElements ?? 60,
+            artifactOwner: opts.artifactOwner
+          }, frame, reply)
         : { window: window.id, snapshotId: null, elements: [] as UiElementInfo[], accessibility: undefined };
       const related: Array<{ window: WindowInfo; screenshot: Screenshot | null; error?: string }> = [];
       if (process.platform === 'win32' && opts.includeRelated && Array.isArray(reply['relatedWindows'])) {
@@ -1153,7 +1182,12 @@ export async function getWindowState(opts: {
           if (!Number.isSafeInteger(relatedWindow.id) || relatedWindow.id <= 0 || relatedWindow.id === window.id) continue;
           try {
             const relatedShot = includeScreenshot
-              ? await screenshotLocked({ window: relatedWindow.id, ownerWindow: window.id, maxWidth: limit }, undefined,
+              ? await screenshotLocked({
+                  window: relatedWindow.id,
+                  ownerWindow: window.id,
+                  maxWidth: limit,
+                  artifactOwner: opts.artifactOwner
+                }, undefined,
                   { generation: generationOfReply(reply), code: 'STALE_FRAME' })
               : null;
             related.push({ window: relatedWindow, screenshot: relatedShot });
@@ -1227,6 +1261,7 @@ export async function screenshot(opts: {
   maxWidth?: number;
   /** Crop in pixels of the most recent returned screenshot. */
   crop?: Rect;
+  artifactOwner?: string | null;
 }): Promise<Screenshot> {
   return exclusive(() => screenshotLocked(opts));
 }
@@ -1234,7 +1269,8 @@ export async function screenshot(opts: {
 async function screenshotFromReply(
   reply: Record<string, any>,
   file: string,
-  requestedWindow: number | null
+  requestedWindow: number | null,
+  artifactOwner: string | null
 ): Promise<Screenshot> {
   const region = reply['region'] as Rect;
   const size = reply['image'] as { width: number; height: number };
@@ -1297,6 +1333,7 @@ async function screenshotFromReply(
   const frame: Frame = {
     id: nextFrameId++,
     helperGeneration: generationOfReply(reply),
+    artifactOwner,
     region,
     scale,
     width: size.width,
@@ -1338,6 +1375,7 @@ async function screenshotLocked(
     full?: boolean;
     maxWidth?: number;
     crop?: Rect;
+    artifactOwner?: string | null;
   },
   cropFrame?: Frame | null,
   expected?: ExpectedHelper
@@ -1349,7 +1387,7 @@ async function screenshotLocked(
   let cropRegion: Rect | undefined;
   if (opts.crop) {
     const source = cropFrame === undefined ? lastFrame : cropFrame;
-    const frame = qualifiedFrame(source);
+    const frame = frameForArtifactOwner(source, opts.artifactOwner);
     if (source && !frame) throw new ComputerError('STALE_FRAME: take a new screenshot before cropping.');
     if (!frame) throw new ComputerError('Take a screenshot first — crop coordinates refer to the most recent frame.');
     expected = { generation: frame.helperGeneration, code: 'STALE_FRAME' };
@@ -1408,7 +1446,12 @@ async function screenshotLocked(
     // from a window-bound frame. Keeping the source window id here would let pixels from an
     // occluding app authorize later input against the covered window. Publish the crop as
     // screen-bound so its frame identity describes the pixels that were actually captured.
-    return await screenshotFromReply(reply, file, opts.crop ? null : opts.window ?? null);
+    return await screenshotFromReply(
+      reply,
+      file,
+      opts.crop ? null : opts.window ?? null,
+      opts.artifactOwner ?? null
+    );
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -1437,6 +1480,7 @@ export async function act(
     app?: string;
     ownerApp?: string;
     beforeSideEffect?: ComputerSideEffectPreflight;
+    artifactOwner?: string | null;
   } = {}
 ): Promise<ActionResult> {
   return exclusive(() => actLocked(actions, opts));
@@ -1466,6 +1510,8 @@ export async function actAndCapture(
      * the policy result itself.
      */
     beforeSideEffect?: ComputerSideEffectPreflight;
+    /** Stable session+conversation owner for retained frame/ref artifacts. */
+    artifactOwner?: string | null;
     capture?: {
       window?: number;
       full?: boolean;
@@ -1478,7 +1524,9 @@ export async function actAndCapture(
   } = {}
 ): Promise<ActionResult & { screenshot: Screenshot | null; verification: VerificationResult | null }> {
   return exclusive(async () => {
-    const before = opts.frameId === undefined ? qualifiedFrame(lastFrame) : frameById(opts.frameId);
+    const before = opts.frameId === undefined
+      ? frameForArtifactOwner(lastFrame, opts.artifactOwner)
+      : frameById(opts.frameId, opts.artifactOwner);
     // capture.crop is expressed in pixels of the screenshot the caller saw, exactly like a
     // coordinate action. Another chat/agent can replace the app-global lastFrame between that
     // screenshot and this call, so using whichever frame happens to be current would crop an
@@ -1499,7 +1547,7 @@ export async function actAndCapture(
     let verification: VerificationResult | null = null;
     if (opts.verify) {
       try {
-        verification = await verifyDesktopLocked(opts.verify);
+        verification = await verifyDesktopLocked(opts.verify, opts.artifactOwner);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new ComputerError(
@@ -1517,7 +1565,11 @@ export async function actAndCapture(
       if (capture.window === undefined && capture.full !== true && capture.crop === undefined) {
         capture.window = opts.window ?? (preferActiveWindow ? (await activeWindow()).window?.id : undefined);
       }
-      return { ...result, screenshot: await screenshotLocked(capture, before), verification };
+      return {
+        ...result,
+        screenshot: await screenshotLocked({ ...capture, artifactOwner: opts.artifactOwner }, before),
+        verification
+      };
     } catch (err) {
       throw new ComputerError(
         `CAPTURE_AFTER_FAILED: completed_count=${result.completedCount}. ${err instanceof Error ? err.message : String(err)}. Observe again; do not repeat completed actions.`,
@@ -1527,7 +1579,10 @@ export async function actAndCapture(
   });
 }
 
-async function verifyDesktopLocked(spec: VerificationSpec): Promise<VerificationResult> {
+async function verifyDesktopLocked(
+  spec: VerificationSpec,
+  artifactOwner: string | null | undefined = undefined
+): Promise<VerificationResult> {
   const startedAt = Date.now();
   const timeoutMs = Math.min(10_000, Math.max(0, Math.floor(spec.timeoutMs ?? 2_000)));
   const deadline = startedAt + timeoutMs;
@@ -1560,8 +1615,14 @@ async function verifyDesktopLocked(spec: VerificationSpec): Promise<Verification
     } else {
       try {
         const found = await findUiLocked(
-          { window: spec.window, query: spec.match, role: spec.role, maxResults: 1 },
-          null
+          {
+            window: spec.window,
+            query: spec.match,
+            role: spec.role,
+            maxResults: 1,
+            artifactOwner
+          },
+          frameForArtifactOwner(lastFrame, artifactOwner)
         );
         const present = found.elements.length > 0;
         if ((spec.until === 'ui_appears' && present) || (spec.until === 'ui_disappears' && !present)) {
@@ -1610,6 +1671,7 @@ async function actLocked(
     app?: string;
     ownerApp?: string;
     beforeSideEffect?: ComputerSideEffectPreflight;
+    artifactOwner?: string | null;
   }
 ): Promise<ActionResult> {
   if (process.platform !== 'win32' && actions.some(action => action.type === 'paste' || action.type === 'launch_app' || action.type === 'ui_action')) {
@@ -1647,7 +1709,7 @@ async function actLocked(
       'FRAME_REQUIRED: coordinate actions must include the frameId returned with the screenshot they came from.'
     );
   }
-  const requestedFrame = frameById(opts.frameId);
+  const requestedFrame = frameById(opts.frameId, opts.artifactOwner);
   // Keep a small immutable history so an unrelated observation does not invalidate a
   // caller's coordinates. The helper revalidates a window-bound frame's exact geometry
   // immediately before input, so retaining it does not turn old pixels into blind clicks.
@@ -1660,9 +1722,10 @@ async function actLocked(
     throw new ComputerError('WINDOW_MISMATCH: coordinates must come from a screenshot of the input target window. Observe that window again.');
   }
   const frame =
-    requestedFrame ?? qualifiedFrame(lastFrame) ?? {
+    requestedFrame ?? frameForArtifactOwner(lastFrame, opts.artifactOwner) ?? {
       id: 0,
       helperGeneration: 0,
+      artifactOwner: opts.artifactOwner ?? null,
       region: { x: 0, y: 0, width: 1, height: 1 },
       scale: 1,
       width: 1,
@@ -1714,7 +1777,7 @@ async function actLocked(
   const uiTargets = new Map<string, { window: number; runtimeKey: string; snapshotId: number }>();
   for (const action of actions) {
     if (action.type !== 'click_ref' && action.type !== 'set_value' && action.type !== 'ui_action') continue;
-    if (!uiTargets.has(action.ref)) uiTargets.set(action.ref, uiTarget(action.ref));
+    if (!uiTargets.has(action.ref)) uiTargets.set(action.ref, uiTarget(action.ref, opts.artifactOwner));
     if (opts.window !== undefined && uiTargets.get(action.ref)!.window !== opts.window) {
       throw new ComputerError('WINDOW_MISMATCH: the accessibility ref belongs to a different input target window.');
     }
@@ -1964,7 +2027,11 @@ async function actLocked(
   if (!Number.isFinite(sx) || !Number.isFinite(sy)) {
     throw new ComputerError('The desktop helper returned an invalid pointer position.');
   }
-  const current = qualifiedFrame(requestedFrame ?? lastFrame, generationOfReply(reply));
+  const current = frameForArtifactOwner(
+    requestedFrame ?? lastFrame,
+    opts.artifactOwner,
+    generationOfReply(reply)
+  );
   const image = current
     ? {
         x: Math.round((sx - current.region.x) * current.scale),

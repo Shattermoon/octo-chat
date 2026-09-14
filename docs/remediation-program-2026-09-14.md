@@ -228,13 +228,15 @@ Scope:
 - make an explicit product decision for clipboard read and encode it in the same policy rather than a separate handler shortcut;
 - cover `launch_app`, `press_key`, `type_text`, `activate_window`, click/scroll/value/drag/secondary actions and code-mode children;
 - treat clipboard read as sensitive disclosure requiring the same exact Principal;
-- keep `allowUnattributedCalls` for eligible self-contained work, not as authority for Desktop mutation/app launch/clipboard access.
+- keep `allowUnattributedCalls` for eligible self-contained work, not as authority for Desktop mutation/app launch/clipboard access;
+- bind retained macOS screenshot frames and accessibility refs to the exact local-session + conversation attachment that observed them, so cross-principal or unattributed observation artifacts cannot authorize later input.
 
 Required regression:
 
 ```text
 unattributed disabled + every mutation class → DENY
 known exact Principal + capability enabled → existing behavior
+observe as Principal A / unattributed → mutate as Principal B → DENY before native work
 ```
 
 #### [READY][ID-001][SES-001] — durable request ownership and session deletion fencing

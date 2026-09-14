@@ -2,13 +2,17 @@
 
 **Owner:** Repository maintainer
 
-**Branch:** `feat/sec-002-exact-desktop-principal`
+**Primary branch:** `feat/sec-002-exact-desktop-principal` (merged as PR #5)
+
+**Security follow-up:** `fix/sec-002-sec-003-macos-artifact-ownership`
 
 **State:** `REVIEW`
 
 **Audit IDs:** SEC-002, SEC-003
 
-**Base:** `e3515a3` (SEC-001 central action-policy seam + FS-001 + repository review/release gates; 2.2.0 / bridge 14)
+**Primary base:** `e3515a3` (SEC-001 central action-policy seam + FS-001 + repository review/release gates; 2.2.0 / bridge 14)
+
+**Follow-up base:** `b81019c` (merged PR #5 on `main`)
 
 ## Task
 
@@ -16,6 +20,12 @@ Close the Desktop attribution gaps identified by SEC-002 and SEC-003 without cha
 Desktop product tier/defaults planned for SEC-004, SEC-005, SEC-006 and SEC-007 or introducing WS-001 WorkspaceLease semantics.
 Every model-facing Desktop mutation, application/process launch and clipboard operation must be
 authorized for the exact companion request/chat/session Principal before irreversible work begins.
+
+PR #5 merged before one final CodeRabbit Major was closed: the retained macOS low-level frame/ref
+stores were app-global and did not remember which exact caller attachment created an observation.
+SEC-002/SEC-003 therefore remain in `REVIEW` until the immediate follow-up binds those artifacts to
+their observing local-session + conversation owner and proves cross-principal/unattributed reuse is
+refused before native input.
 
 ## Product decision
 
@@ -72,12 +82,37 @@ so a later request cannot inherit an older registrar or operation classification
 - No App Automation vs Full Computer Control product tier or command-equivalent terminal/Run
   blocking; that is SEC-004, SEC-005, SEC-006 and SEC-007.
 - No WorkspaceLease or revocation-generation contract; that is WS-001.
-- No redesign of retained macOS screen-read verification/capture authority. Mid-call screen
-  revocation during verification/capture is an adjacent read-authority follow-up, not part of the
-  SEC-002/SEC-003 mutation/clipboard finding closed here.
+- No redesign of retained macOS screen-read permission or verification/capture liveness. This
+  follow-up only binds a captured frame/ref's later reuse as mutation authority to its observing
+  attachment. Mid-call screen revocation during verification/capture remains an adjacent
+  read-authority follow-up, not part of SEC-002/SEC-003.
 - No removal of existing Desktop features or schemas.
 
 ## Validation
+
+### Immediate post-merge artifact-ownership follow-up
+
+- Retained macOS screenshot frames and accessibility refs now carry an opaque stable owner derived
+  from the exact local-session + conversation attachment that observed them. Request id is
+  intentionally not part of this retained-artifact key because normal observe → act spans tool
+  requests; every mutation still requires a fresh exact request/chat/session Principal through the
+  existing action policy and final lifecycle preflight.
+- A different conversation in the same local session cannot consume the source chat's frame/ref,
+  another session cannot consume it, and artifacts created by unattributed observation remain
+  unusable as later mutation authority.
+- The low-level owner check is enforced where frames/refs are resolved, not only in the macOS MCP
+  adapter, while internal/native callers that do not opt into an artifact owner retain their prior
+  behavior.
+- Focused follow-up validation: `npm run typecheck` passed; `git diff --check` passed; 9 focused
+  Desktop/native/policy/code-mode/agents files passed with 309 tests / 8 platform-skipped.
+- Full MCP integration passed independently with 173 tests / 6 platform-skipped; privacy and
+  third-party notice/source-package verification also passed.
+- No live macOS Desktop probe was exercised from this Windows development environment. The
+  retained macOS contract is covered deterministically through the real computer owner with mocked
+  stdio/addon transports plus MCP adapter tests; hosted release CI remains Linux/Windows only.
+- Added regressions prove same-attachment observe → act remains functional, cross-conversation
+  frame/ref consumption is rejected before a native request, and an unattributed observation cannot
+  later be upgraded into exact-caller mutation authority.
 
 - `npm run typecheck` passed.
 - Final focused authority/regression set passed: 8 files, 248 passed / 7 platform-skipped,

@@ -150,7 +150,7 @@ The renderer has no direct filesystem, command, secret or generic main-process a
 | Terminal | Durable local session principal → process session id. |
 | Renderer | Selected session/draft key + load generation. |
 | Connection | Endpoint/tunnel generation. |
-| Desktop input | Capture frame/accessibility ref + target geometry + helper generation. |
+| Desktop input | Exact session+conversation artifact owner + capture frame/accessibility ref + target geometry + helper generation. |
 
 When four features break together, follow one concrete identity through these boundaries. Find
 the first wrong fact, not the last UI that displayed it. Discovery vs enforcement, page vs
@@ -1798,6 +1798,12 @@ helper generation. Recheck those after asynchronous image work and before every 
 in a batch. A replaced helper/window/display invalidates old coordinates and refs. Bound
 decoded images, report actual visible crops, and never label a visible screen crop as a hidden
 window capture. Coordinate clamping and physical input respect the current display/button map.
+
+The retained macOS `observe`/`computer` surface also binds every reusable screenshot frame and
+accessibility ref to the exact local-session + conversation attachment that observed it. A fresh
+request in that same attachment may consume the artifact after passing the normal exact-Principal
+policy/lifecycle checks; a replacement conversation, another session, or an unattributed
+observation may not lend its frame/ref to Desktop input.
 
 Windows uses source-owned Windows.Graphics.Capture for exact HWND compositor pixels, including
 covered GPU windows, without activation or a visible-screen fallback. Minimized/unavailable

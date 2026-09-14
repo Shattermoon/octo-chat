@@ -63,6 +63,24 @@ function exactDesktopCall<T>(fn: () => Promise<T>): Promise<T> {
   return runInCallContext(call, fn);
 }
 
+function desktopAttachmentCall<T>(attachment: string, fn: () => Promise<T>): Promise<T> {
+  const request = ++principalSequence;
+  const call: CallContext = {
+    startedAt: Date.now(),
+    transportKey: null,
+    agent: null,
+    caller: {
+      transportKey: null,
+      requestId: `desktop-attachment-request-${request}`,
+      conversationId: `desktop-attachment-chat-${attachment}`,
+      sessionId: `desktop-attachment-session-${attachment}`
+    },
+    outcome: null,
+    evidence: emptyEvidence()
+  };
+  return runInCallContext(call, fn);
+}
+
 function caps(over: Partial<Capabilities>): Capabilities {
   return {
     browse: false,
@@ -282,6 +300,52 @@ describe('Desktop computer browser chords', () => {
 
 describe('Desktop observe runtime contract', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('binds observe and computer artifacts to the stable exact session/conversation attachment', async () => {
+    desktop.getWindowState.mockResolvedValueOnce({
+      window: { id: 9, process: 'Target', state: 'foreground', title: 'Owned', x: 0, y: 0, width: 640, height: 480 },
+      snapshotId: 3,
+      screenshot: null,
+      elements: [],
+      uiUnavailable: null
+    });
+    desktop.actAndCapture.mockResolvedValueOnce({
+      completedCount: 1,
+      routes: ['helper'],
+      cursor: null,
+      clipboard: [],
+      screenshot: null,
+      verification: null
+    });
+    const surface = desktopSurface({ control: true });
+    const observe = surface.get('observe')!;
+    const computer = surface.get('computer')!;
+
+    await desktopAttachmentCall('same', () => observe.handler({ what: 'window', window: 9, screenshot: false }));
+    await desktopAttachmentCall('same', () => computer.handler({ actions: [{ type: 'type', text: 'fixture' }] }));
+
+    const owner = 'session:desktop-attachment-session-same:chat:desktop-attachment-chat-same';
+    expect(desktop.getWindowState).toHaveBeenCalledWith(expect.objectContaining({ artifactOwner: owner }));
+    expect(desktop.actAndCapture).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ artifactOwner: owner })
+    );
+  });
+
+  it('marks unattributed observations as unusable mutation artifacts', async () => {
+    desktop.getWindowState.mockResolvedValueOnce({
+      window: { id: 9, process: 'Target', state: 'foreground', title: 'Anonymous', x: 0, y: 0, width: 640, height: 480 },
+      snapshotId: 4,
+      screenshot: null,
+      elements: [],
+      uiUnavailable: null
+    });
+    const observe = desktopSurface().get('observe')!;
+
+    await observe.handler({ what: 'window', window: 9, screenshot: false });
+
+    expect(desktop.getWindowState).toHaveBeenCalledWith(expect.objectContaining({ artifactOwner: null }));
+  });
 
   it('rejects explicit window ids where the documented mode cannot use them', () => {
     const observe = desktopSurface().get('observe')!;
