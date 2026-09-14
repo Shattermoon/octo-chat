@@ -1175,7 +1175,14 @@ export function authorizeToolAction(
   };
   const decision = evaluateActionPolicy(action, { capabilities: ctx.caps, readOnly: ctx.readOnly }, requirement);
   try {
-    ctx.onActionPolicyDecision?.(decision, action);
+    ctx.onActionPolicyDecision?.({
+      ...decision,
+      effectiveAuthority: {
+        ...decision.effectiveAuthority,
+        requiredCapabilities: [...decision.effectiveAuthority.requiredCapabilities]
+      },
+      auditMetadata: { ...decision.auditMetadata }
+    }, action);
   } catch (error) {
     logWarn(`action policy observer failed for ${surface}:${operationId}: ${error instanceof Error ? error.message : String(error)}`);
   }

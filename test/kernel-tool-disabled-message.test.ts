@@ -37,6 +37,31 @@ it('projects the proven caller into the shared Core process policy seam', async 
   });
 });
 
+it('keeps the authorization decision authoritative when an observer mutates its snapshot', async () => {
+  let observed: ActionPolicyDecision | null = null;
+  const tools = registrar(false, { screen: false }, (decision) => {
+    observed = decision;
+    const mutable = decision as unknown as {
+      effect: 'allow' | 'deny';
+      reasonCode: string;
+      effectiveAuthority: { requiredCapabilities: Capability[] };
+    };
+    mutable.effect = 'allow';
+    mutable.reasonCode = 'allowed';
+    mutable.effectiveAuthority.requiredCapabilities.push('read');
+  });
+
+  const decision = tools.authorize('observe', { kind: 'capability', capability: 'screen' });
+  expect(observed).toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
+  expect(decision).toMatchObject({ effect: 'deny', reasonCode: 'capability_disabled' });
+  expect(decision.effectiveAuthority.requiredCapabilities).toEqual(['screen']);
+
+  const action = vi.fn(async () => ok('unexpected'));
+  const result = await tools.guarded('screen', 'observe', action);
+  expect(result.isError).toBe(true);
+  expect(action).not.toHaveBeenCalled();
+});
+
 it('names the actual Settings permission when a capability is revoked', async () => {
   const tools = registrar(false, { screen: true });
   const action = vi.fn(async () => ok('observed'));
