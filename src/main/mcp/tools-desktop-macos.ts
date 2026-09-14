@@ -62,7 +62,7 @@ const DEFAULT_WINDOW_RESULTS = 60;
 function desktopArtifactOwner(): string | null {
   const caller = currentCall()?.caller;
   return caller?.sessionId && caller.conversationId
-    ? `session:${caller.sessionId}:chat:${caller.conversationId}`
+    ? JSON.stringify([caller.sessionId, caller.conversationId])
     : null;
 }
 

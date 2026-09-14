@@ -63,7 +63,11 @@ function exactDesktopCall<T>(fn: () => Promise<T>): Promise<T> {
   return runInCallContext(call, fn);
 }
 
-function desktopAttachmentCall<T>(attachment: string, fn: () => Promise<T>): Promise<T> {
+function desktopPrincipalCall<T>(
+  sessionId: string,
+  conversationId: string,
+  fn: () => Promise<T>
+): Promise<T> {
   const request = ++principalSequence;
   const call: CallContext = {
     startedAt: Date.now(),
@@ -72,13 +76,21 @@ function desktopAttachmentCall<T>(attachment: string, fn: () => Promise<T>): Pro
     caller: {
       transportKey: null,
       requestId: `desktop-attachment-request-${request}`,
-      conversationId: `desktop-attachment-chat-${attachment}`,
-      sessionId: `desktop-attachment-session-${attachment}`
+      conversationId,
+      sessionId
     },
     outcome: null,
     evidence: emptyEvidence()
   };
   return runInCallContext(call, fn);
+}
+
+function desktopAttachmentCall<T>(attachment: string, fn: () => Promise<T>): Promise<T> {
+  return desktopPrincipalCall(
+    `desktop-attachment-session-${attachment}`,
+    `desktop-attachment-chat-${attachment}`,
+    fn
+  );
 }
 
 function caps(over: Partial<Capabilities>): Capabilities {
@@ -324,12 +336,39 @@ describe('Desktop observe runtime contract', () => {
     await desktopAttachmentCall('same', () => observe.handler({ what: 'window', window: 9, screenshot: false }));
     await desktopAttachmentCall('same', () => computer.handler({ actions: [{ type: 'type', text: 'fixture' }] }));
 
-    const owner = 'session:desktop-attachment-session-same:chat:desktop-attachment-chat-same';
+    const owner = JSON.stringify([
+      'desktop-attachment-session-same',
+      'desktop-attachment-chat-same'
+    ]);
     expect(desktop.getWindowState).toHaveBeenCalledWith(expect.objectContaining({ artifactOwner: owner }));
     expect(desktop.actAndCapture).toHaveBeenCalledWith(
       expect.any(Array),
       expect.objectContaining({ artifactOwner: owner })
     );
+  });
+
+  it('encodes session and conversation artifact owners without delimiter collisions', async () => {
+    desktop.getWindowState.mockResolvedValue({
+      window: { id: 9, process: 'Target', state: 'foreground', title: 'Owned', x: 0, y: 0, width: 640, height: 480 },
+      snapshotId: 5,
+      screenshot: null,
+      elements: [],
+      uiUnavailable: null
+    });
+    const observe = desktopSurface().get('observe')!;
+
+    await desktopPrincipalCall('alpha', 'beta:chat:gamma', () =>
+      observe.handler({ what: 'window', window: 9, screenshot: false })
+    );
+    await desktopPrincipalCall('alpha:chat:beta', 'gamma', () =>
+      observe.handler({ what: 'window', window: 9, screenshot: false })
+    );
+
+    const firstOwner = desktop.getWindowState.mock.calls[0]?.[0]?.artifactOwner;
+    const secondOwner = desktop.getWindowState.mock.calls[1]?.[0]?.artifactOwner;
+    expect(firstOwner).toBe(JSON.stringify(['alpha', 'beta:chat:gamma']));
+    expect(secondOwner).toBe(JSON.stringify(['alpha:chat:beta', 'gamma']));
+    expect(firstOwner).not.toBe(secondOwner);
   });
 
   it('marks unattributed observations as unusable mutation artifacts', async () => {

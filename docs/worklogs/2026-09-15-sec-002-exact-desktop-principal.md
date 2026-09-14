@@ -97,6 +97,8 @@ so a later request cannot inherit an older registrar or operation classification
   intentionally not part of this retained-artifact key because normal observe → act spans tool
   requests; every mutation still requires a fresh exact request/chat/session Principal through the
   existing action policy and final lifecycle preflight.
+- The owner is encoded as an unambiguous serialized tuple rather than delimiter concatenation, with
+  a regression for identifier pairs that would collide under `session:...:chat:...` formatting.
 - A different conversation in the same local session cannot consume the source chat's frame/ref,
   another session cannot consume it, and artifacts created by unattributed observation remain
   unusable as later mutation authority.
@@ -104,7 +106,7 @@ so a later request cannot inherit an older registrar or operation classification
   adapter, while internal/native callers that do not opt into an artifact owner retain their prior
   behavior.
 - Focused follow-up validation: `npm run typecheck` passed; `git diff --check` passed; 10 focused
-  Desktop/native/hardening/policy/code-mode/agents files passed with 325 tests / 8 platform-skipped.
+  Desktop/native/hardening/policy/code-mode/agents files passed with 326 tests / 8 platform-skipped.
 - Full MCP integration passed independently with 173 tests / 6 platform-skipped; privacy and
   third-party notice/source-package verification also passed.
 - No live macOS Desktop probe was exercised from this Windows development environment. The
