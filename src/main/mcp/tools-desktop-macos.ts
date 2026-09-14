@@ -174,7 +174,7 @@ const verificationArg = z
   .strict();
 
 export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
-  const { ctx, caps, exposedCaps } = reg;
+  const { ctx, exposedCaps } = reg;
 
   // ---------------------------------------------------------------- observe
 
@@ -463,7 +463,8 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
           // Not reg.guarded: this tool covers two permissions. Pointer and keyboard steps
           // need "control", the clipboard steps need their own, and one blanket refusal
           // would hide which of them the user actually has to switch on.
-          if (!caps.control && actions.some((a) => a.type !== 'wait' && !a.type.endsWith('_clipboard'))) {
+          const needsControl = actions.some((a) => a.type !== 'wait' && !a.type.endsWith('_clipboard'));
+          if (needsControl && reg.authorize('computer:desktop', { kind: 'capability', capability: 'control' }).effect === 'deny') {
             return fail(
               'TOOL_DISABLED: mouse and keyboard control is disabled by the current Octo Chat permissions. ' +
                 'Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
@@ -507,13 +508,13 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
                 // Gated here rather than by leaving the variant out of the schema: the
                 // schema is cached by ChatGPT, and a tool that quietly changes shape when
                 // a checkbox moves is worse than one that says plainly it is switched off.
-                if (!caps.clipboardRead) {
+                if (reg.authorize('computer:read_clipboard', { kind: 'capability', capability: 'clipboardRead' }).effect === 'deny') {
                   return fail('TOOL_DISABLED: read_clipboard needs the Read the clipboard permission.');
                 }
                 parsed.push({ type: 'read_clipboard' });
                 break;
               case 'write_clipboard':
-                if (!caps.clipboardWrite) {
+                if (reg.authorize('computer:write_clipboard', { kind: 'capability', capability: 'clipboardWrite' }).effect === 'deny') {
                   return fail('TOOL_DISABLED: write_clipboard needs the Replace clipboard text permission.');
                 }
                 parsed.push({ type: 'write_clipboard', text: a.text });
@@ -526,7 +527,7 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
           noteDetail(parsed.map((a) => a.type).join(', '));
           const verifyCapture = verify?.capture === 'always' || verify?.capture === 'on_change';
           const wantsCapture = captureAfter === true || verifyCapture;
-          if ((verify || wantsCapture) && !caps.screen) {
+          if ((verify || wantsCapture) && reg.authorize('computer:observe', { kind: 'capability', capability: 'screen' }).effect === 'deny') {
             return fail('TOOL_DISABLED: verification and result capture need the See the screen permission.');
           }
           const parsedVerify: VerificationSpec | undefined = verify

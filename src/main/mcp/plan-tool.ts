@@ -15,7 +15,7 @@ export function registerPlanTool(reg: SurfaceRegistrar): void {
     description: 'Updates your task plan in the user’s app. Use for work with several meaningful steps; skip simple tasks. Send the complete plan with short step headlines, useful details and current statuses. Keep at most one step in_progress. Update after completing a step or changing approach. This only displays a plan; it does not execute steps or advance queued stages.',
     inputSchema: agentPlanUpdateSchema,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-  })), update => guard('update_plan', async () => {
+  })), update => guard('update_plan', async () => reg.enforcePolicy('update_plan', { kind: 'none' }, async () => {
     if (!reg.sessionToolsLive) return reg.featureDisabled('Session recording', 'Settings → Chat');
     const caller = currentCaller();
     if (!caller.sessionId || !caller.conversationId) {
@@ -23,5 +23,5 @@ export function registerPlanTool(reg: SurfaceRegistrar): void {
     }
     const accepted = await updateSessionPlan(caller.sessionId, caller.conversationId, update, currentCall()!.startedAt);
     return accepted ? ok('Plan updated') : fail('This plan update is stale or its chat was replaced. The current plan was preserved.');
-  }));
+  })));
 }

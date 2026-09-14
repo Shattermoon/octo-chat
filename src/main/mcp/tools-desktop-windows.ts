@@ -101,8 +101,11 @@ export function registerWindowsDesktopTools(reg: SurfaceRegistrar): void {
       annotations: { readOnlyHint: read, destructiveHint: !read, idempotentHint: read, openWorldHint: true }
     }), 'windows'), input => reg.guarded(capability, method, async () => {
       // The schema is checked by the same registrar for direct calls and code-mode children.
-      if (method === 'type_text' && 'text' in input && /[\r\n]/.test(String(input.text)) && !reg.caps.clipboardWrite) {
-        return fail('TOOL_DISABLED: multiline text needs the existing Replace clipboard text permission. No input ran.');
+      if (method === 'type_text' && 'text' in input && /[\r\n]/.test(String(input.text))) {
+        const clipboard = reg.authorize('type_text:clipboard', { kind: 'capability', capability: 'clipboardWrite' });
+        if (clipboard.effect === 'deny') {
+          return fail('TOOL_DISABLED: multiline text needs the existing Replace clipboard text permission. No input ran.');
+        }
       }
       if (method === 'press_key') {
         const keys = input as { key: string; window: { id: number } };

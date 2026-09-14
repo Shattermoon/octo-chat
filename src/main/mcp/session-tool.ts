@@ -170,11 +170,11 @@ export function registerSessionTool(reg: SurfaceRegistrar): void {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
     })),
     async (input) =>
-      guard('session', async () => {
+      guard('session', async () => reg.enforcePolicy('session', { kind: 'none' }, async () => {
         if (!reg.sessionToolsLive) return reg.featureDisabled('Session recording', 'Record sessions');
         if (input.action === 'search') return searchSessions(input.query, input.cursor);
         return readSession(input.session_id!, input.include, input.tool_call, input.cursor);
-      })
+      }))
   );
 }
 

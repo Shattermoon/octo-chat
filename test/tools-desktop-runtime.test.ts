@@ -29,6 +29,8 @@ vi.mock('../src/main/computer/index.js', () => ({
 }));
 
 import { registerMacOSDesktopTools as registerDesktopTools } from '../src/main/mcp/tools-desktop-macos.js';
+import { authorizeToolAction, type ToolContext } from '../src/main/mcp/kernel.js';
+import type { ActionRequirement } from '../src/main/action-policy.js';
 
 function caps(over: Partial<Capabilities>): Capabilities {
   return {
@@ -53,8 +55,9 @@ function caps(over: Partial<Capabilities>): Capabilities {
 function desktopSurface(over: Partial<Capabilities> = {}) {
   const registered = new Map<string, { config: any; handler: (input: any) => Promise<any> }>();
   const liveCaps = caps({ screen: true, ...over });
+  const policyCtx: ToolContext = { roots: [], caps: liveCaps, readOnly: false, privacyScreenshots: false };
   registerDesktopTools({
-    ctx: { privacyScreenshots: false },
+    ctx: policyCtx,
     caps: liveCaps,
     exposedCaps: liveCaps,
     sessionToolsLive: false,
@@ -65,7 +68,11 @@ function desktopSurface(over: Partial<Capabilities> = {}) {
     register(name: string, config: any, handler: (input: any) => Promise<any>) {
       registered.set(name, { config, handler });
     },
-    guarded: async (_cap: string, _name: string, fn: () => Promise<any>) => fn(),
+    authorize: (name: string, requirement: ActionRequirement) => authorizeToolAction(policyCtx, 'desktop', name, requirement),
+    guarded: async (cap: keyof Capabilities, name: string, fn: () => Promise<any>) =>
+      authorizeToolAction(policyCtx, 'desktop', name, { kind: 'capability', capability: cap }).effect === 'allow'
+        ? fn()
+        : { isError: true, content: [{ type: 'text', text: 'TOOL_DISABLED' }] },
     featureDisabled: vi.fn(),
     registered: () => [...registered.keys()]
   } as never);

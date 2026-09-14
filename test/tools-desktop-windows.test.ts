@@ -16,13 +16,23 @@ vi.mock('../src/main/computer/windows-api.js', async importOriginal => {
   } };
 });
 import { registerWindowsDesktopTools } from '../src/main/mcp/tools-desktop-windows.js';
+import { authorizeToolAction, type ToolContext } from '../src/main/mcp/kernel.js';
+import type { ActionContext, ActionPolicyDecision, ActionRequirement } from '../src/main/action-policy.js';
 
-function surface(over: Partial<Capabilities> = {}) {
+function surface(
+  over: Partial<Capabilities> = {},
+  onActionPolicyDecision?: (decision: ActionPolicyDecision, action: ActionContext) => void
+) {
   const caps = { screen: true, control: true, clipboardRead: true, clipboardWrite: true, ...over } as Capabilities;
+  const ctx: ToolContext = { roots: [], caps, exposedCaps: { ...caps }, readOnly: false, sessionTools: false, agentTools: false, onActionPolicyDecision };
   const tools = new Map<string, { config: any; handler: (input: any) => Promise<any> }>();
   registerWindowsDesktopTools({ caps, exposedCaps: { ...caps },
     register: (name: string, config: any, handler: any) => tools.set(name, { config, handler }),
-    guarded: async (cap: keyof Capabilities, _name: string, run: () => Promise<any>) => caps[cap] ? run() : { isError: true, content: [{ type: 'text', text: 'TOOL_DISABLED' }] }
+    authorize: (name: string, requirement: ActionRequirement) => authorizeToolAction(ctx, 'desktop', name, requirement),
+    guarded: async (cap: keyof Capabilities, name: string, run: () => Promise<any>) =>
+      authorizeToolAction(ctx, 'desktop', name, { kind: 'capability', capability: cap }).effect === 'allow'
+        ? run()
+        : { isError: true, content: [{ type: 'text', text: 'TOOL_DISABLED' }] }
   } as never);
   return { caps, tools, call: (name: string, args: any = {}) => tools.get(name)!.handler(tools.get(name)!.config.inputSchema.parse(args)) };
 }
@@ -31,6 +41,22 @@ let principalSequence = 0;
 beforeEach(() => { vi.clearAllMocks(); native.apis.length = 0; native.allowUnattributed = false; native.call = { caller: { sessionId: `test-${++principalSequence}` } }; });
 
 describe('Windows Desktop public registrar', () => {
+  it('routes application launch and clipboard mutation through the central action vocabulary', async () => {
+    const observed: Array<{ decision: ActionPolicyDecision; action: ActionContext }> = [];
+    const api = surface({}, (decision, action) => observed.push({ decision, action }));
+    await api.call('launch_app', { app: 'fixture.exe' });
+    await api.call('write_clipboard', { text: 'fixture' });
+    expect(observed.map(entry => ({
+      effect: entry.decision.effect,
+      actionClass: entry.action.actionClass,
+      target: entry.action.target.kind,
+      capability: entry.action.capability
+    }))).toEqual([
+      { effect: 'allow', actionClass: 'launch-application', target: 'application', capability: 'control' },
+      { effect: 'allow', actionClass: 'clipboard-write', target: 'clipboard', capability: 'clipboardWrite' }
+    ]);
+  });
+
   it('matches the settings tool names to registration for each Desktop permission', () => {
     for (const capability of DESKTOP_CAPABILITIES) {
       const caps = { screen: false, control: false, clipboardRead: false, clipboardWrite: false, [capability]: true };
