@@ -56,7 +56,7 @@ export const EXEC_COMMAND_CMD_DESCRIPTION = LAUNCHES_WINDOWS_POWERSHELL_5
   : 'Shell command to execute. To read a file, use the read tool instead.';
 
 export const EXEC_COMMAND_CMDS_DESCRIPTION =
-  'Sequential shell commands to run in one shell session. Use this for related checks instead of separate exec_command calls. Each command gets a labeled output section and exit code; all commands run after ordinary non-zero exits, and the overall exit code is the first non-zero code.';
+  'Run related commands sequentially in one shell session. Each gets a labeled output section and exit code; later commands still run after non-zero exits, and the batch reports the first non-zero code.';
 
 export const EXEC_COMMAND_WORKDIR_DESCRIPTION = 'Working directory for the command. Defaults to the turn cwd.';
 
@@ -64,7 +64,7 @@ export const EXEC_COMMAND_TTY_DESCRIPTION =
   'True allocates a PTY for the command; false or omitted uses plain pipes.';
 
 export const EXEC_COMMAND_YIELD_TIME_DESCRIPTION = IS_WINDOWS
-  ? 'Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 250-30000 ms.'
+  ? 'Maximum wait before returning a session ID. Commands that finish sooner return immediately. Omit for the 10000 ms default; Windows range is 250-30000 ms.'
   : 'Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.';
 
 /**
