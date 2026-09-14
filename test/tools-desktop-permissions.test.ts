@@ -32,6 +32,8 @@ vi.mock('../src/main/computer/index.js', () => ({
 }));
 
 import { registerMacOSDesktopTools as registerDesktopTools } from '../src/main/mcp/tools-desktop-macos.js';
+import { authorizeToolAction, type ToolContext } from '../src/main/mcp/kernel.js';
+import type { ActionRequirement } from '../src/main/action-policy.js';
 
 function caps(over: Partial<Capabilities>): Capabilities {
   return {
@@ -56,9 +58,10 @@ function caps(over: Partial<Capabilities>): Capabilities {
 describe('macOS Desktop computer permission normalization', () => {
   it('allows wait in a clipboard-only batch without demanding mouse/keyboard control', async () => {
     const liveCaps = caps({ clipboardRead: true });
+    const policyCtx: ToolContext = { roots: [], caps: liveCaps, readOnly: false, privacyScreenshots: false };
     let computerHandler: ((input: any) => Promise<any>) | null = null;
     const registrar = {
-      ctx: { privacyScreenshots: false },
+      ctx: policyCtx,
       caps: liveCaps,
       exposedCaps: liveCaps,
       sessionToolsLive: false,
@@ -69,6 +72,7 @@ describe('macOS Desktop computer permission normalization', () => {
       register(name: string, _config: unknown, handler: (input: any) => Promise<any>) {
         if (name === 'computer') computerHandler = handler;
       },
+      authorize: (name: string, requirement: ActionRequirement) => authorizeToolAction(policyCtx, 'desktop', name, requirement),
       guarded: vi.fn()
     };
     registerDesktopTools(registrar as never);
@@ -87,6 +91,7 @@ describe('macOS Desktop computer permission normalization', () => {
 
   it('bounds clipboard text before it becomes an MCP result', async () => {
     const liveCaps = caps({ clipboardRead: true });
+    const policyCtx: ToolContext = { roots: [], caps: liveCaps, readOnly: false, privacyScreenshots: false };
     let computerHandler: ((input: any) => Promise<any>) | null = null;
     computer.actAndCapture.mockResolvedValueOnce({
       cursor: null,
@@ -97,7 +102,7 @@ describe('macOS Desktop computer permission normalization', () => {
       verification: null
     } as any);
     const registrar = {
-      ctx: { privacyScreenshots: false },
+      ctx: policyCtx,
       caps: liveCaps,
       exposedCaps: liveCaps,
       sessionToolsLive: false,
@@ -108,6 +113,7 @@ describe('macOS Desktop computer permission normalization', () => {
       register(name: string, _config: unknown, handler: (input: any) => Promise<any>) {
         if (name === 'computer') computerHandler = handler;
       },
+      authorize: (name: string, requirement: ActionRequirement) => authorizeToolAction(policyCtx, 'desktop', name, requirement),
       guarded: vi.fn()
     };
     registerDesktopTools(registrar as never);
@@ -120,6 +126,7 @@ describe('macOS Desktop computer permission normalization', () => {
 
   it('caps the visible-window list and says when more matches exist', async () => {
     const liveCaps = caps({ screen: true });
+    const policyCtx: ToolContext = { roots: [], caps: liveCaps, readOnly: false, privacyScreenshots: false };
     computer.listWindows.mockResolvedValueOnce({
       screen: { x: 0, y: 0, width: 1920, height: 1080 },
       windows: Array.from({ length: 130 }, (_, index) => ({
@@ -135,7 +142,7 @@ describe('macOS Desktop computer permission normalization', () => {
     } as any);
     let observeHandler: ((input: any) => Promise<any>) | null = null;
     const registrar = {
-      ctx: { privacyScreenshots: false },
+      ctx: policyCtx,
       caps: liveCaps,
       exposedCaps: liveCaps,
       sessionToolsLive: false,
@@ -146,6 +153,7 @@ describe('macOS Desktop computer permission normalization', () => {
       register(name: string, _config: unknown, handler: (input: any) => Promise<any>) {
         if (name === 'observe') observeHandler = handler;
       },
+      authorize: (name: string, requirement: ActionRequirement) => authorizeToolAction(policyCtx, 'desktop', name, requirement),
       guarded: async (_cap: unknown, _name: unknown, fn: () => Promise<any>) => fn()
     };
     registerDesktopTools(registrar as never);

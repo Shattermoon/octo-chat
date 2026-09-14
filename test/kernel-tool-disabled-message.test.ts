@@ -1,13 +1,41 @@
 import { expect, it, vi } from 'vitest';
 import { createRegistrar, ok } from '../src/main/mcp/kernel.js';
+import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
+import type { ActionContext, ActionPolicyDecision } from '../src/main/action-policy.js';
 import { DEFAULT_CAPABILITIES, WRITE_CAPABILITIES, type Capability } from '../src/shared/types.js';
 
-function registrar(readOnly: boolean, enabled: Partial<Record<Capability, boolean>> = {}) {
+function registrar(
+  readOnly: boolean,
+  enabled: Partial<Record<Capability, boolean>> = {},
+  onActionPolicyDecision?: (decision: ActionPolicyDecision, action: ActionContext) => void
+) {
   return createRegistrar(null, {
     roots: [], readOnly, caps: { ...DEFAULT_CAPABILITIES, ...enabled },
-    sessionTools: false, agentTools: false
+    sessionTools: false, agentTools: false, onActionPolicyDecision
   }, 'core');
 }
+
+it('projects the proven caller into the shared Core process policy seam', async () => {
+  const observed: Array<{ decision: ActionPolicyDecision; action: ActionContext }> = [];
+  const tools = registrar(false, { command: true }, (decision, action) => observed.push({ decision, action }));
+  const call: CallContext = {
+    startedAt: Date.now(), transportKey: null, agent: 'prime',
+    caller: { transportKey: null, requestId: 'request-policy', conversationId: 'conversation-policy', sessionId: 'session-policy' },
+    outcome: null, evidence: emptyEvidence()
+  };
+  const result = await runInCallContext(call, () =>
+    tools.guarded('command', 'exec_command', async () => ok('ran'))
+  );
+  expect(result).toEqual(ok('ran'));
+  expect(observed).toHaveLength(1);
+  expect(observed[0]!.decision).toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
+  expect(observed[0]!.action).toMatchObject({
+    sourceSurface: 'core', actionClass: 'execute-process', target: { kind: 'process' }, capability: 'command',
+    principal: {
+      conversationId: 'conversation-policy', localSessionId: 'session-policy', requestId: 'request-policy', agentId: 'prime'
+    }
+  });
+});
 
 it('names the actual Settings permission when a capability is revoked', async () => {
   const tools = registrar(false, { screen: true });

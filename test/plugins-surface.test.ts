@@ -15,6 +15,7 @@ import * as input from '../src/main/session/input.js';
 import * as agents from '../src/main/agents.js';
 import * as ownership from '../src/main/codex/ownership.js';
 import * as bridge from '../src/main/bridge.js';
+import type { ActionContext, ActionPolicyDecision } from '../src/main/action-policy.js';
 
 const plugin = vi.hoisted(() => ({
   enabled: true,
@@ -45,6 +46,7 @@ vi.mock('../src/main/plugins/manager.js', async importOriginal => {
 let directory: string;
 let endpoint: McpEndpoint;
 let sequence = 0;
+const policyDecisions: Array<{ decision: ActionPolicyDecision; action: ActionContext }> = [];
 async function rpc(surface: 'plugins' | 'core' | 'desktop', method: string, params = {}, requestId?: string): Promise<any> {
   const response = await fetch(endpoint.urls[surface], { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...(requestId ? { 'x-request-id': requestId } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: ++sequence, method, params }) });
   const raw = await response.text();
@@ -54,9 +56,12 @@ beforeAll(async () => {
   directory = await makeTempDir('clf-plugins-surface-');
   initConfigPath(directory); await loadConfig(); initDurableStore(directory); initSessionStore(directory);
   await updateConfig(config => ({ ...config, multiAgent: { ...config.multiAgent, enabled: false } }));
-  endpoint = await startMcpServer(() => ({ roots: [], caps: effectiveCapabilities(getConfig()), readOnly: getConfig().readOnly }));
+  endpoint = await startMcpServer(() => ({
+    roots: [], caps: effectiveCapabilities(getConfig()), readOnly: getConfig().readOnly,
+    onActionPolicyDecision: (decision, action) => policyDecisions.push({ decision, action })
+  }));
 });
-beforeEach(async () => { plugin.enabled = true; plugin.call.mockClear(); plugin.redactResult.mockClear(); await updateConfig(config => ({ ...config, readOnly: false })); });
+beforeEach(async () => { policyDecisions.length = 0; plugin.enabled = true; plugin.call.mockClear(); plugin.redactResult.mockClear(); await updateConfig(config => ({ ...config, readOnly: false })); });
 afterEach(() => { vi.restoreAllMocks(); });
 afterAll(async () => { await endpoint?.stop(); await flushRecorder(); resetDurableForTests(); await removeTempDir(directory); });
 
@@ -79,6 +84,10 @@ it('preserves structured results, resource blocks and metadata through the share
   const call = events.find(event => event.kind === 'tool_call' && event.call.tool === plugin.declaration.name);
   expect(call?.kind === 'tool_call' ? call.call.result.text : '').toContain('structuredContent');
   expect(JSON.stringify(events)).not.toContain('credential-fixture');
+  expect(policyDecisions).toContainEqual(expect.objectContaining({
+    decision: expect.objectContaining({ effect: 'allow', reasonCode: 'allowed' }),
+    action: expect.objectContaining({ sourceSurface: 'plugins', actionClass: 'remote-mutate', target: { kind: 'external-integration' } })
+  }));
 });
 it('rejects stale calls after disabling and fails closed in read-only mode regardless of upstream annotations', async () => {
   plugin.enabled = false;

@@ -92,6 +92,14 @@ import { DEFAULT_MAX_OUTPUT_TOKENS } from '../codex/unified-exec-constants.js';
 import { unattributedRepairEta } from '../bridge.js';
 import { conversationAttachment, readOverflowText } from '../session/store.js';
 import type { StoredText, ToolOutcome } from '../../shared/session.js';
+import {
+  actionIntentFor,
+  evaluateActionPolicy,
+  type ActionContext,
+  type ActionPolicyDecision,
+  type ActionRequirement,
+  type Principal
+} from '../action-policy.js';
 
 export interface ToolContext {
   exposedFinishTool?: boolean;
@@ -131,6 +139,11 @@ export interface ToolContext {
    * ever added to. Defaults to the live answer when the caller does not track it.
    */
   exposedFind?: boolean;
+  /**
+   * Content-free policy decisions for tests and future diagnostics. Observation is never an
+   * authorization input: throwing here is ignored and cannot change whether an action runs.
+   */
+  onActionPolicyDecision?: (decision: ActionPolicyDecision, action: ActionContext) => void;
 }
 
 export type ToolContent =
@@ -1113,6 +1126,8 @@ export interface SurfaceRegistrar {
   ): void;
   /** Runs `fn` only while `cap` is live, and explains the refusal otherwise. */
   guarded(cap: keyof Capabilities, name: string, fn: () => Promise<ToolResult>): Promise<ToolResult>;
+  /** Central action-policy decision for manual/composite gates that retain custom refusal text. */
+  authorize(name: string, requirement: ActionRequirement): ActionPolicyDecision;
   /** Refusal used when a whole feature is off but its tool is still exposed. */
   featureDisabled(feature: string, setting: string): ToolResult;
   /** Names actually registered on this server, in registration order. */
@@ -1120,6 +1135,51 @@ export interface SurfaceRegistrar {
   /** Same registered handler/schema, with a fresh child recording context and inherited proof. */
   invokeNested(name: string, args: unknown, parent: CallContext): Promise<ToolResult>;
   descriptions(): Array<{ name: string; description: string }>;
+}
+
+/** Build the Principal from the strongest proof available at the instant policy is evaluated. */
+function principalForAction(): Principal {
+  const call = currentCall();
+  const conversationId = call?.caller.conversationId ?? null;
+  return {
+    conversationId,
+    localSessionId: call?.caller.sessionId ?? null,
+    requestId: call?.caller.requestId ?? null,
+    runId: conversationId ? currentRunId(conversationId) : null,
+    agentId: call?.agent ?? null
+  };
+}
+
+/**
+ * One policy entry point shared by registrar-backed tools and the dynamic Plugins surface.
+ *
+ * This deliberately receives live ToolContext rather than caching one at server construction:
+ * code-mode rebuilds its registrar for every child and plugin calls ask their live context for
+ * every child too, so a permission revocation during an awaited script is visible here.
+ */
+export function authorizeToolAction(
+  ctx: ToolContext,
+  surface: SurfaceId,
+  operationId: string,
+  requirement: ActionRequirement
+): ActionPolicyDecision {
+  const intent = actionIntentFor(surface, operationId, requirement);
+  const action: ActionContext = {
+    principal: principalForAction(),
+    sourceSurface: surface,
+    actionClass: intent.actionClass,
+    target: { kind: intent.target },
+    capability: requirement.kind === 'capability' ? requirement.capability : null,
+    workspaceLease: null,
+    operationId
+  };
+  const decision = evaluateActionPolicy(action, { capabilities: ctx.caps, readOnly: ctx.readOnly }, requirement);
+  try {
+    ctx.onActionPolicyDecision?.(decision, action);
+  } catch (error) {
+    logWarn(`action policy observer failed for ${surface}:${operationId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return decision;
 }
 
 export function createRegistrar(server: McpServer | null, ctx: ToolContext, surface: SurfaceId, observe?: (name: string, config: { description: string; inputSchema: z.ZodType; annotations?: ToolAnnotations }) => void): SurfaceRegistrar {
@@ -1148,6 +1208,9 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     findExposed,
     registered: () => [...names],
     descriptions: () => [...handlers].map(([name, entry]) => ({ name, description: entry.description })),
+    authorize(name, requirement) {
+      return authorizeToolAction(ctx, surface, name, requirement);
+    },
     invokeNested(name, args, parent) {
       return dispatch(name, args, parent.caller.transportKey, parent.caller.requestId, surface, async () => {
         const entry = handlers.get(name);
@@ -1181,7 +1244,8 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     },
     guarded(cap, name, fn) {
       return guard(name, async () => {
-        if (!caps[cap]) {
+        const decision = authorizeToolAction(ctx, surface, name, { kind: 'capability', capability: cap });
+        if (decision.effect === 'deny') {
           // The effective capability can be off because Read-only overrides its checkbox.
           // Name that owner, otherwise use the same permission label as Settings.
           return fail(

@@ -312,7 +312,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       }), readPathDescription),
       async ({ paths, start_line, end_line, max_bytes }) =>
         guard('read', async () => {
-          if (!caps.read && !caps.browse && !caps.metadata) {
+          if (reg.authorize('read', { kind: 'any-capability', capabilities: ['read', 'browse', 'metadata'] }).effect === 'deny') {
             return fail(
               'TOOL_DISABLED: read is disabled by the current Octo Chat permissions. Ask the user to enable reading in the app.'
             );
@@ -449,7 +449,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       })),
       async ({ path }) =>
         guard('view_image', async () => {
-          if (!caps.read) {
+          if (reg.authorize('view_image', { kind: 'capability', capability: 'read' }).effect === 'deny') {
             return fail(
               'TOOL_DISABLED: view_image is disabled by the current Octo Chat permissions. Ask the user to enable reading in the app.'
             );
@@ -616,7 +616,9 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       })),
       async ({ patch }) =>
         guard('apply_patch', async () => {
-          if (!caps.create && !caps.edit && !caps.move && !caps.deleteFile) {
+          if (reg.authorize('apply_patch', {
+            kind: 'any-capability', capabilities: ['create', 'edit', 'move', 'deleteFile']
+          }).effect === 'deny') {
             return fail(
               'TOOL_DISABLED: apply_patch is disabled by the current Octo Chat permissions. Ask the user to enable changing files in the app.'
             );
@@ -1022,7 +1024,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       })),
       async ({ file, path: requestedPath }) =>
         guard('download_artifact', async () => {
-          if (!caps.saveArtifact) {
+          if (reg.authorize('download_artifact', { kind: 'capability', capability: 'saveArtifact' }).effect === 'deny') {
             return fail(
               'TOOL_DISABLED: download_artifact is disabled by the current Octo Chat permissions. Ask the user to enable saving ChatGPT files in the app.'
             );
