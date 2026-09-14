@@ -248,11 +248,17 @@ export async function createDirectory(path: string, options: CreateDirectoryOpti
   await rawPromises.mkdir(path, { recursive: options.recursive });
 }
 
-/** `DirectFileSystem::get_metadata`: stats the link itself, then follows it when it is one. */
-export async function getMetadata(path: string): Promise<FileMetadata> {
+/**
+ * Metadata primitive with an explicit symlink-follow policy.
+ *
+ * Ordinary direct metadata keeps Codex's follow behavior. Recursive no-follow walks use the
+ * same lstat snapshot without ever issuing the target stat, including when an entry is swapped
+ * to a link after readdir but before metadata inspection.
+ */
+async function getMetadataWithSymlinkPolicy(path: string, followSymlink: boolean): Promise<FileMetadata> {
   const symlinkMetadata = await rawPromises.lstat(path);
   const isSymlink = symlinkMetadata.isSymbolicLink();
-  const metadata = isSymlink ? await rawPromises.stat(path) : symlinkMetadata;
+  const metadata = isSymlink && followSymlink ? await rawPromises.stat(path) : symlinkMetadata;
   return {
     isDirectory: metadata.isDirectory(),
     isFile: metadata.isFile(),
@@ -261,6 +267,11 @@ export async function getMetadata(path: string): Promise<FileMetadata> {
     createdAtMs: systemTimeToUnixMs(metadata.birthtimeMs),
     modifiedAtMs: systemTimeToUnixMs(metadata.mtimeMs)
   };
+}
+
+/** `DirectFileSystem::get_metadata`: stats the link itself, then follows it when it is one. */
+export async function getMetadata(path: string): Promise<FileMetadata> {
+  return getMetadataWithSymlinkPolicy(path, true);
 }
 
 /**
@@ -349,7 +360,7 @@ export async function walk(root: string, options: WalkOptions): Promise<WalkOutc
     );
   }
 
-  const rootMetadata = await getMetadata(root);
+  const rootMetadata = await getMetadataWithSymlinkPolicy(root, options.followDirectorySymlinks);
   if (!rootMetadata.isDirectory || (rootMetadata.isSymlink && !options.followDirectorySymlinks)) {
     return { entries: [], errors: [], truncated: false };
   }
@@ -387,7 +398,7 @@ export async function walk(root: string, options: WalkOptions): Promise<WalkOutc
       const path = nodePath.join(directory, entry.fileName);
       let metadata: FileMetadata;
       try {
-        metadata = await getMetadata(path);
+        metadata = await getMetadataWithSymlinkPolicy(path, options.followDirectorySymlinks);
       } catch (error) {
         if (!pushWalkError(outcome, state, path, errorMessage(error))) return outcome;
         continue;
