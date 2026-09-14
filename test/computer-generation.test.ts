@@ -288,6 +288,38 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.clipboard.writeText).not.toHaveBeenCalled();
   });
 
+  it('rechecks external authority after a local wait before a later native batch', async () => {
+    vi.useFakeTimers();
+    let allowed = true;
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      if (effect === 'desktop' && !allowed) {
+        throw new Error(
+          'CHAT_BLOCKED: the user blocked this conversation from using local tools. ' +
+          'No further Desktop or clipboard side effect ran after this authority change.'
+        );
+      }
+    });
+    const work = computer.act([
+      { type: 'wait', ms: 100 },
+      { type: 'type', text: 'must not be typed' }
+    ], { beforeSideEffect });
+    const settled = work.catch((error) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    allowed = false;
+    const sent = fake.requests.length;
+    await vi.advanceTimersByTimeAsync(100);
+    const error = await settled;
+    expect(error).toMatchObject({
+      completedCount: 1,
+      failedIndex: 1,
+      message: expect.stringMatching(/PARTIAL_BATCH: completed_count=1 failed_index=1.*CHAT_BLOCKED/)
+    });
+    expect(error.message).toContain('No further Desktop or clipboard side effect ran');
+    expect(error.message).not.toMatch(/no (?:local )?tool was run|Nothing was run/i);
+    expect(beforeSideEffect).toHaveBeenCalledWith('desktop');
+    expect(fake.requests).toHaveLength(sent);
+  });
+
   it('retains completed input evidence if the subsequent screenshot fails', async () => {
     vi.spyOn(fs, 'stat').mockRejectedValueOnce(new Error('fixture image unavailable'));
     await expect(computer.actAndCapture([{ type: 'type', text: 'already sent' }], { capture: { window: 77 } }))

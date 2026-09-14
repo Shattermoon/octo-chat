@@ -1786,10 +1786,11 @@ postconditions. Registrars own live capability checks. Windows `windows-api.ts` 
 13 Window2 methods: `list_windows`, `get_window`, `list_apps`, `launch_app`, `get_window_state`,
 `click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`,
 `activate_window`. The old `observe`/`computer` wrapper is macOS-only. Windows observation state
-is bounded per exact caller or a separate shared unattributed context when explicitly allowed,
-contains no pixels/text, and input consumes its indexes/geometry. Identified and unattributed
-calls never borrow each other's observations. Opted-out anonymous calls discard that context
-and refuse indexed/coordinate input.
+is bounded per exact caller or a separate shared unattributed context when observation is allowed,
+and contains no pixels/text. Desktop input still requires an exact Principal: it consumes only
+that Principal's indexes/geometry and never the shared unattributed context. Identified and
+unattributed observations never borrow each other's state, and unattributed observation cannot
+authorize follow-up indexed/coordinate input regardless of `allowUnattributedCalls`.
 Explicit activation consumes observation state too; ordinary input already activates its target.
 Late observations and replaced principals cannot lend another call their state.
 Observe → act uses exact frame/ref, target geometry and

@@ -9,6 +9,7 @@ import {
 import { DEFAULT_CAPABILITIES } from '../src/shared/types.js';
 import { createRegistrar, type ToolResult } from '../src/main/mcp/kernel.js';
 import { registerCoreTools } from '../src/main/mcp/tools-core.js';
+import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
 
 const principal: Principal = {
   conversationId: 'conversation-1',
@@ -257,5 +258,40 @@ describe('central action policy', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).toContain('denied by the current Octo Chat policy');
     expect(featureDisabled).not.toHaveBeenCalled();
+  });
+
+  it('re-evaluates registrar authorization from live context after a handler await', async () => {
+    const initial = {
+      roots: [],
+      readOnly: false,
+      caps: { ...DEFAULT_CAPABILITIES, control: true },
+      exposedCaps: { ...DEFAULT_CAPABILITIES, control: true }
+    };
+    let live = { ...initial, caps: { ...initial.caps }, exposedCaps: { ...initial.exposedCaps } };
+    const registrar = createRegistrar(null, initial, 'desktop', undefined, () => live);
+    const call: CallContext = {
+      startedAt: Date.now(),
+      transportKey: null,
+      agent: null,
+      caller: {
+        transportKey: null,
+        requestId: 'request-live-policy',
+        conversationId: 'conversation-live-policy',
+        sessionId: 'session-live-policy'
+      },
+      outcome: null,
+      evidence: emptyEvidence()
+    };
+
+    await runInCallContext(call, async () => {
+      expect(registrar.authorize('computer:desktop', { kind: 'capability', capability: 'control' }))
+        .toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
+      live = { ...live, readOnly: true };
+      expect(registrar.authorize('computer:desktop', { kind: 'capability', capability: 'control' }))
+        .toMatchObject({ effect: 'deny', reasonCode: 'read_only' });
+      live = { ...live, readOnly: false, caps: { ...live.caps, control: false } };
+      expect(registrar.authorize('computer:desktop', { kind: 'capability', capability: 'control' }))
+        .toMatchObject({ effect: 'deny', reasonCode: 'capability_disabled' });
+    });
   });
 });

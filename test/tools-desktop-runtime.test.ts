@@ -2,6 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Capabilities } from '../src/shared/types.js';
 import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
 
+const lifecycle = vi.hoisted(() => ({ blocked: false, attachment: 'current' as 'current' | 'superseded' | 'unknown' }));
+
+vi.mock('../src/main/session/store.js', async (original) => ({
+  ...await original<typeof import('../src/main/session/store.js')>(),
+  conversationAttachment: async () => lifecycle.attachment
+}));
+vi.mock('../src/main/session/blocked-chats.js', async (original) => ({
+  ...await original<typeof import('../src/main/session/blocked-chats.js')>(),
+  isChatBlocked: () => lifecycle.blocked
+}));
+
 const desktop = vi.hoisted(() => {
   class TestComputerError extends Error {}
   return {
@@ -72,10 +83,11 @@ function caps(over: Partial<Capabilities>): Capabilities {
   };
 }
 
-function desktopSurface(over: Partial<Capabilities> = {}) {
+function desktopSurface(over: Partial<Capabilities> = {}, inspect?: (ctx: ToolContext) => void) {
   const registered = new Map<string, { config: any; handler: (input: any) => Promise<any> }>();
   const liveCaps = caps({ screen: true, ...over });
   const policyCtx: ToolContext = { roots: [], caps: liveCaps, readOnly: false, privacyScreenshots: false };
+  inspect?.(policyCtx);
   registerDesktopTools({
     ctx: policyCtx,
     caps: liveCaps,
@@ -106,6 +118,11 @@ describe('Desktop computer browser chords', () => {
   const chrome = { id: 41, title: 'Build GTA Web Game - Google Chrome', process: 'chrome', ...screen, state: 'foreground' };
   const notepad = { ...chrome, id: 42, title: 'notes.txt - Notepad', process: 'notepad' };
   const acted = { completedCount: 1, routes: ['helper'], cursor: null, clipboard: [], screenshot: null, verification: null };
+
+  beforeEach(() => {
+    lifecycle.blocked = false;
+    lifecycle.attachment = 'current';
+  });
 
   it('refuses a tab or window chord aimed at the browser in front', async () => {
     desktop.actAndCapture.mockClear();
@@ -141,6 +158,77 @@ describe('Desktop computer browser chords', () => {
     const result = await exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] }));
     expect(result.isError).toBeFalsy();
     expect(desktop.actAndCapture).toHaveBeenCalledTimes(1);
+    expect(desktop.actAndCapture).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ beforeSideEffect: expect.any(Function) })
+    );
+  });
+
+  it.each(['capability', 'read-only'] as const)(
+    'revalidates %s after browser-chord inspection before native input',
+    async (revocation) => {
+      let releaseWindow!: (value: { window: typeof notepad; screen: typeof screen }) => void;
+      desktop.actAndCapture.mockClear();
+      desktop.activeWindow.mockImplementationOnce(() => new Promise((resolve) => { releaseWindow = resolve; }));
+      desktop.actAndCapture.mockResolvedValueOnce(acted);
+      let policyCtx!: ToolContext;
+      const computer = desktopSurface({ control: true }, (ctx) => { policyCtx = ctx; }).get('computer')!;
+
+      const pending = exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] }));
+      await vi.waitFor(() => expect(desktop.activeWindow).toHaveBeenCalledTimes(1));
+      if (revocation === 'capability') policyCtx.caps.control = false;
+      else policyCtx.readOnly = true;
+      releaseWindow({ window: notepad, screen });
+
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('TOOL_DISABLED');
+      expect(desktop.actAndCapture).not.toHaveBeenCalled();
+    }
+  );
+
+  it('revalidates caller lifecycle after browser-chord inspection before native input', async () => {
+    let releaseWindow!: (value: { window: typeof notepad; screen: typeof screen }) => void;
+    desktop.actAndCapture.mockClear();
+    desktop.activeWindow.mockImplementationOnce(() => new Promise((resolve) => { releaseWindow = resolve; }));
+    desktop.actAndCapture.mockResolvedValueOnce(acted);
+    const computer = desktopSurface({ control: true }).get('computer')!;
+
+    const pending = exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] }));
+    await vi.waitFor(() => expect(desktop.activeWindow).toHaveBeenCalledTimes(1));
+    lifecycle.blocked = true;
+    releaseWindow({ window: notepad, screen });
+
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('CHAT_BLOCKED');
+    expect(JSON.stringify(result)).toContain('No further Desktop or clipboard side effect ran');
+    expect(JSON.stringify(result)).not.toMatch(/no (?:local )?tool was run|Nothing was run/i);
+    expect(desktop.actAndCapture).not.toHaveBeenCalled();
+  });
+
+  it('revalidates clipboard authority after browser-chord inspection in a mixed batch', async () => {
+    let releaseWindow!: (value: { window: typeof notepad; screen: typeof screen }) => void;
+    desktop.actAndCapture.mockClear();
+    desktop.activeWindow.mockImplementationOnce(() => new Promise((resolve) => { releaseWindow = resolve; }));
+    desktop.actAndCapture.mockResolvedValueOnce(acted);
+    let policyCtx!: ToolContext;
+    const computer = desktopSurface(
+      { control: true, clipboardRead: true },
+      (ctx) => { policyCtx = ctx; }
+    ).get('computer')!;
+
+    const pending = exactDesktopCall(() => computer.handler({
+      actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }, { type: 'read_clipboard' }]
+    }));
+    await vi.waitFor(() => expect(desktop.activeWindow).toHaveBeenCalledTimes(1));
+    policyCtx.caps.clipboardRead = false;
+    releaseWindow({ window: notepad, screen });
+
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('read_clipboard');
+    expect(desktop.actAndCapture).not.toHaveBeenCalled();
   });
 
   it('never asks about the window for an ordinary key', async () => {

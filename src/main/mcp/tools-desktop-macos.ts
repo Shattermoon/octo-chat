@@ -28,13 +28,16 @@ import {
   screenshot,
   waitForWindow,
   type Action,
+  type ComputerSideEffect,
   type VerificationSpec
 } from '../computer/index.js';
 import { browserTabChord, isBrowserProcess } from '../computer/browser-chords.js';
+import { IdentityLostError } from '../agents.js';
 import { logInfo } from '../logger.js';
 import { noteCount, noteDetail } from './call-context.js';
 import {
   cropArg,
+  assertCurrentCallLifecycle,
   fail,
   failIdentity,
   guard,
@@ -465,6 +468,34 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
           // need "control", the clipboard steps need their own, and one blanket refusal
           // would hide which of them the user actually has to switch on.
           const needsControl = actions.some((a) => a.type !== 'wait' && !a.type.endsWith('_clipboard'));
+          const requireLiveAuthority = async (effect: ComputerSideEffect): Promise<void> => {
+            // browserChordRefusal() and actAndCapture() both await. A caller can be blocked,
+            // superseded or retired while either is paused, so lifecycle is revalidated at the
+            // same final boundary as the live capability decision.
+            await assertCurrentCallLifecycle();
+            const decision = effect === 'desktop'
+              ? reg.authorize('computer:desktop', { kind: 'capability', capability: 'control' })
+              : effect === 'clipboard-read'
+                ? reg.authorize('computer:read_clipboard', { kind: 'capability', capability: 'clipboardRead' })
+                : reg.authorize('computer:write_clipboard', { kind: 'capability', capability: 'clipboardWrite' });
+            if (decision.effect === 'allow') return;
+            if (decision.reasonCode === 'caller_identity_required') {
+              throw new IdentityLostError(
+                effect === 'desktop'
+                  ? 'CALLER_IDENTITY_REQUIRED: Desktop input requires exact companion request/chat/session identity. Retry after the companion reconnects; no input ran.'
+                  : effect === 'clipboard-read'
+                    ? 'CALLER_IDENTITY_REQUIRED: reading the clipboard requires exact companion request/chat/session identity. Retry after the companion reconnects; no clipboard data was read.'
+                    : 'CALLER_IDENTITY_REQUIRED: replacing the clipboard requires exact companion request/chat/session identity. Retry after the companion reconnects; no clipboard data was changed.'
+              );
+            }
+            throw new ComputerError(
+              effect === 'desktop'
+                ? 'TOOL_DISABLED: mouse and keyboard control is disabled by the current Octo Chat permissions. Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
+                : effect === 'clipboard-read'
+                  ? 'TOOL_DISABLED: read_clipboard needs the Read the clipboard permission.'
+                  : 'TOOL_DISABLED: write_clipboard needs the Replace clipboard text permission.'
+            );
+          };
           if (needsControl) {
             const decision = reg.authorize('computer:desktop', { kind: 'capability', capability: 'control' });
             if (decision.effect === 'deny') {
@@ -513,7 +544,7 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
               case 'wait':
                 parsed.push({ type: 'wait', ms: a.ms });
                 break;
-              case 'read_clipboard':
+              case 'read_clipboard': {
                 // Gated here rather than by leaving the variant out of the schema: the
                 // schema is cached by ChatGPT, and a tool that quietly changes shape when
                 // a checkbox moves is worse than one that says plainly it is switched off.
@@ -528,7 +559,8 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
                 }
                 parsed.push({ type: 'read_clipboard' });
                 break;
-              case 'write_clipboard':
+              }
+              case 'write_clipboard': {
                 const writeClipboardDecision = reg.authorize('computer:write_clipboard', { kind: 'capability', capability: 'clipboardWrite' });
                 if (writeClipboardDecision.effect === 'deny') {
                   if (writeClipboardDecision.reasonCode === 'caller_identity_required') {
@@ -540,10 +572,21 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
                 }
                 parsed.push({ type: 'write_clipboard', text: a.text });
                 break;
+              }
             }
           }
           const chordRefusal = await browserChordRefusal(parsed);
           if (chordRefusal) return fail(chordRefusal);
+          // Recheck once after browser inspection so a revocation there prevents entering the
+          // native owner at all. The same callback is also passed into actAndCapture so a later
+          // local wait cannot carry stale authority into a subsequent native/clipboard effect.
+          if (needsControl) await requireLiveAuthority('desktop');
+          if (parsed.some((action) => action.type === 'read_clipboard')) {
+            await requireLiveAuthority('clipboard-read');
+          }
+          if (parsed.some((action) => action.type === 'write_clipboard')) {
+            await requireLiveAuthority('clipboard-write');
+          }
           logInfo(`tool computer ${parsed.map((a) => a.type).join(', ')}`);
           noteDetail(parsed.map((a) => a.type).join(', '));
           const verifyCapture = verify?.capture === 'always' || verify?.capture === 'on_change';
@@ -568,6 +611,7 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
           // before anyone else can touch the desktop.
           const result = await actAndCapture(parsed, {
             frameId,
+            beforeSideEffect: requireLiveAuthority,
             verify: parsedVerify,
             capture:
               wantsCapture

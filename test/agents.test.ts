@@ -91,6 +91,7 @@ const {
   workerRevivalClaimed
 } = await import('../src/main/agents.js');
 const { startMcpServer } = await import('../src/main/mcp/server.js');
+const { dispatch, IDENTITY_EVIDENCE_MS, ok } = await import('../src/main/mcp/kernel.js');
 const { runningToolCalls } = await import('../src/main/mcp/call-context.js');
 const { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } = await import('../src/main/durable.js');
 const { findSessionByConversation, initSessionStore, readRecentEvents, resetSessionStoreForTests } = await import(
@@ -2544,6 +2545,50 @@ describe('through the MCP endpoint', () => {
     await setEnabled(true);
     expect(exact).toContain('WORKER_RETIRED');
   });
+
+  it.each([
+    { initial: true, next: false, denied: true },
+    { initial: false, next: true, denied: false }
+  ])(
+    'uses the live unattributed setting after a bounded identity wait ($initial → $next)',
+    async ({ initial, next, denied }) => {
+      await setEnabled(true, 3, initial);
+      startSwarm(1);
+      startWorker('worker-1', `c-live-unattributed-${String(initial)}`);
+      expect(clearAgent(PRIME_ID).cleared).toBe('run');
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+      const run = vi.fn(async () => ok('executed'));
+      try {
+        const pending = dispatch(
+          'read',
+          { paths: ['/anything'] },
+          null,
+          `wfr_live_unattributed_${String(initial)}_${String(next)}`,
+          'core',
+          run
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+        // The setting changes while the request is held for exact request-id evidence.
+        await setEnabled(true, 3, next);
+        await vi.advanceTimersByTimeAsync(IDENTITY_EVIDENCE_MS);
+        const result = await pending;
+        const text = JSON.stringify(result);
+        if (denied) {
+          expect(text).toContain('CALLER_IDENTITY_REQUIRED');
+          expect(run).not.toHaveBeenCalled();
+        } else {
+          expect(text).not.toContain('CALLER_IDENTITY_REQUIRED');
+          expect(run).toHaveBeenCalledOnce();
+        }
+      } finally {
+        vi.useRealTimers();
+        await setEnabled(true);
+      }
+    }
+  );
 
   it('explains scheduled-run permission with dormant history and never adopts that history', async () => {
     startSwarm(1);

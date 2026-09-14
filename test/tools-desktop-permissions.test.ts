@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Capabilities } from '../src/shared/types.js';
 import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
 
+vi.mock('../src/main/session/store.js', async (original) => ({
+  ...await original<typeof import('../src/main/session/store.js')>(),
+  conversationAttachment: async () => 'current' as const
+}));
+
 const computer = vi.hoisted(() => ({
   actAndCapture: vi.fn(async () => ({
     cursor: {

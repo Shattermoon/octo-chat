@@ -41,9 +41,9 @@ call's request correlation:
 No active-tab, latest-session, friendly agent name, or sole-candidate fallback can replace those
 facts. Direct calls get a bounded chance to acquire late request correlation before policy runs;
 code-mode children inherit the proven parent caller and re-enter a freshly built live registrar.
-The unrelated `allowUnattributedCalls` setting is still read at its original post-identity-wait
-point, so this PR does not accidentally snapshot that live Core/agent setting earlier while it
-waits for browser evidence.
+The unrelated `allowUnattributedCalls` setting is read only after identity and input/output
+acknowledgement awaits, at the final ambiguity decision point. A setting change while the call is
+paused therefore applies to that same call rather than being frozen at request start.
 
 The central policy owns this product decision. Existing lower owners remain authoritative below
 it: Windows caller-local observation state, native frame/ref generations and geometry checks,
@@ -64,25 +64,42 @@ browser-chord protections, native helper generations, live capability checks and
 - No App Automation vs Full Computer Control product tier or command-equivalent terminal/Run
   blocking; that is SEC-004, SEC-005, SEC-006 and SEC-007.
 - No WorkspaceLease or revocation-generation contract; that is WS-001.
+- No redesign of retained macOS screen-read verification/capture authority. Mid-call screen
+  revocation during verification/capture is an adjacent read-authority follow-up, not part of the
+  SEC-002/SEC-003 mutation/clipboard finding closed here.
 - No removal of existing Desktop features or schemas.
 
 ## Validation
 
 - `npm run typecheck` passed.
-- Focused security/regression set plus the complete agents suite passed: 9 files, 264/264 tests.
+- Final focused authority/regression set passed: 8 files, 248 passed / 7 platform-skipped,
+  including the complete agents suite (155/155), live setting changes during the bounded identity
+  wait, and setting changes held across both input and background-output acknowledgements.
+- Independent native-policy re-review also passed 91 focused Desktop/policy tests / 7 skipped,
+  17/17 partial-batch/helper-retirement/identity-recovery tests, and 163/163 agents + run-inbox
+  tests. It found no remaining blocker in the reported macOS Control/Read-only/caller-lifecycle
+  mutation TOCTOU.
 - Full MCP integration passed: 173 passed / 6 platform-skipped.
+- Windows Desktop + code-mode + disabled-tool + MCP integration passed together: 222 passed / 6
+  platform-skipped after the review repair.
 - Renderer settings/layout coverage passed: 77/77 tests.
 - `npm run verify:notices` passed: 93 production packages, 7 catalog entries and 730 pinned
   native source archives/patches validated.
 - `npm run verify:privacy` passed: public-history privacy gate clean on the local branch.
 - `git diff --check` passed.
-- A full local `npm run verify` reproduced the already-tracked CI-001 aggregate contamination:
-  6 failures among 4,431 tests, all outside the SEC-002/SEC-003 authority paths. Each failing file then
-  passed independently (`code-mode-runtime` 14/14, `exec-hints` 118/118, `renderer-state`
-  38/38, `session-finish` 28/28), so this PR does not hide or widen timeouts to make the
-  aggregate oracle look green. The CI-001 stabilization tranche remains the owner of that instability.
-- Independent SEC-002/SEC-003 audit found no High/Medium merge blocker and confirmed that the Windows
-  observation-state/native generation owners remain unchanged below the central policy seam.
+- A full local `npm run verify` on the review-repair working tree reproduced the already-tracked
+  CI-001 aggregate contamination: 11 failures among 4,441 tests, spread across code-mode timing,
+  Windows live UIA/capture environment, exec-hints timing, MCP glob-scan timing and session-finish
+  state/timing. Isolation then passed `code-mode-runtime` 14/14, `exec-hints` 118/118,
+  `session-finish` 28/28 and MCP 173/173 with 6 platform skips. `computer.test.ts` retained two
+  live-Windows UIA failures whose behavior depends on the foreground/browser desktop environment;
+  the deterministic mocked Desktop authority suites are green. This PR does not widen timeouts or
+  weaken assertions to make the aggregate oracle look green; CI-001 remains the owner of that
+  instability.
+- The macOS repair now rechecks live capability/Read-only and current caller lifecycle after the
+  browser-chord await, after local waits, after helper queue/startup, and immediately before native
+  helper send or Electron clipboard I/O. Mid-batch revocation preserves completed-count/failure-index
+  evidence and uses no-retry-safe wording instead of falsely claiming that nothing ran.
 - Hosted Linux/Windows CI and the repository maintainer's exact-final-SHA self-review are still
   required before merge and will be recorded on the pushed review head. CodeRabbit remains an
   additional automated review signal, not a substitute for the maintainer's review judgment.

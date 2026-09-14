@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(() => {
@@ -24,6 +24,7 @@ describe('desktop local-only action path', () => {
     mocks.readText.mockClear();
     mocks.writeText.mockClear();
   });
+  afterEach(() => vi.useRealTimers());
 
   it('runs clipboard-only work without starting the PowerShell desktop helper', async () => {
     const result = await act([
@@ -46,6 +47,27 @@ describe('desktop local-only action path', () => {
       ])
     ).rejects.toThrow(/UNKNOWN_UI_REF|STALE_REF/);
 
+    expect(mocks.writeText).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it('rechecks external authority after a local wait before clipboard mutation', async () => {
+    vi.useFakeTimers();
+    let allowed = true;
+    const work = act(
+      [{ type: 'wait', ms: 100 }, { type: 'write_clipboard', text: 'must-not-land' }],
+      {
+        beforeSideEffect: async (effect) => {
+          if (effect === 'clipboard-write' && !allowed) throw new Error('CLIPBOARD_AUTHORITY_REVOKED');
+        }
+      }
+    );
+    const rejected = expect(work).rejects.toThrow(/CLIPBOARD_AUTHORITY_REVOKED/);
+    void rejected.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    allowed = false;
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
     expect(mocks.writeText).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
   });

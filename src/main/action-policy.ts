@@ -63,7 +63,7 @@ export interface ActionContext {
   readonly target: ActionTarget;
   /** Exact single capability when one exists; composite adapters leave this null. */
   readonly capability: Capability | null;
-  /** PR-09 will replace this null placeholder with the durable WorkspaceLease proof. */
+  /** WS-001 will replace this null placeholder with the durable WorkspaceLease proof. */
   readonly workspaceLease: null;
   readonly operationId: string;
 }
