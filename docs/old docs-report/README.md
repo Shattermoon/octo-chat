@@ -5,7 +5,7 @@ This directory contains engineering audits, incident notes, implementation plans
 Use these current sources first:
 
 - [Full 2026-09-14 audit](../octo-chat-full-audit-2026-09-14.md) — authoritative finding set that superseded the earlier audit draft.
-- [Single-maintainer remediation program](../remediation-program-2026-09-14.md) — current work-item/dependency/state plan.
+- [Single-maintainer remediation program](../remediation-program-2026-09-14.md) — current audit/dependency/state plan.
 - [`AGENTS.md`](../../AGENTS.md) — current architecture, invariants, development and release rules.
 - [`SECURITY.md`](../../SECURITY.md) — current public security model.
 

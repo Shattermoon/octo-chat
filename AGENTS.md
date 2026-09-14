@@ -1914,7 +1914,7 @@ delegation. Audit-only means no source/test/config/AppData writes beyond the nam
 The prime independently verifies important claims; parallel reports are hypotheses, not votes.
 
 For the current hardening program, use `docs/octo-chat-full-audit-2026-09-14.md` as the finding
-basis and `docs/remediation-program-2026-09-14.md` as the dependency/state/work-item plan. Earlier
+basis and `docs/remediation-program-2026-09-14.md` as the dependency/state/audit plan. Earlier
 engineering audits and worklogs are archived under `docs/old docs-report/`; they are historical
 evidence, not current implementation authority.
 
@@ -1926,10 +1926,10 @@ maintainer must review the exact final pushed SHA, leave a GitHub self-review co
 the applicable ownership/generation/side-effect/crash/revocation checks and validation evidence,
 resolve or explicitly disposition substantive CodeRabbit findings, and merge only after required
 hosted checks are green. Do not wait for, invent or claim a nonexistent counterpart maintainer.
-Use the remediation program's stable `RMD-###` work-item IDs; GitHub `#<number>` is only the
-hosting-system identifier and never the task/dependency identity. New remediation PR titles use
-`[RMD-###][STATE][AREA] Short imperative title`, with the state vocabulary and area codes defined
-in the remediation program. New branches use `rmd/###-<area>-<short-slug>`.
+Use the audit's existing IDs as the remediation identity; GitHub `#<number>` is only the
+hosting-system identifier and never the roadmap/dependency identity. New remediation PR titles use
+`[STATE][AUDIT-ID][AUDIT-ID...] Short imperative title`, with lifecycle states defined in the
+remediation program. New branches use `<type>/<audit-id[-audit-id...]>-<short-slug>`.
 
 When integrating external PRs, preserve original authorship. Adapted or snapshot-integrated
 work must name the original PR/author and carry appropriate GitHub-linked `Co-authored-by`
