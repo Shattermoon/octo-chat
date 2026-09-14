@@ -355,7 +355,10 @@ function setCallerConversation(context: CallContext, conversationId: string | nu
  * different question: whether that proven conversation is still allowed to act *now*. Compact &
  * Resume, the user's block button, and worker retirement/sleep can all revoke a caller while a
  * composite Desktop tool is awaiting browser/native inspection. Unknown session attachment is not
- * a revocation — the dispatcher already permits it — but a proved superseded attachment is.
+ * an in-flight sensitive call can no longer use an `unknown` attachment because its captured
+ * request/chat/session Principal is no longer provably current. That is not a permanent Block:
+ * a later request may establish a fresh exact attachment. A proved superseded attachment is
+ * refused under its dedicated lineage error below.
  */
 export async function assertCurrentCallLifecycle(): Promise<void> {
   const caller = currentCall()?.caller;
