@@ -264,6 +264,30 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.requests.filter(request => request.op === 'act')).toHaveLength(1);
   });
 
+  it.runIf(transport === 'stdio')('does not retry paste after clipboard publication when final control authority is revoked', async () => {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    const effects: string[] = [];
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      effects.push(effect);
+      if (effects.length === 3) throw new Error('DESKTOP_AUTHORITY_REVOKED');
+    });
+
+    await expect(computer.act(
+      [{ type: 'paste', text: 'published but not delivered' }],
+      { window: 77, beforeSideEffect }
+    )).rejects.toMatchObject({
+      completedCount: 0,
+      failedIndex: 0,
+      message: expect.stringMatching(/DESKTOP_AUTHORITY_REVOKED.*Clipboard text was replaced; paste delivery is not confirmed/)
+    });
+
+    expect(effects).toEqual(['desktop', 'clipboard-write', 'desktop']);
+    expect(fake.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('published but not delivered');
+    expect(fake.requests.filter(request => request.op === 'act')).toEqual([
+      { op: 'act', targetWindow: 77, actions: [{ type: 'focus', window: 77 }] }
+    ]);
+  });
+
   it.runIf(transport === 'stdio')('does not replace the clipboard when target activation fails before paste', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     fake.overrides.focusFailure = true;

@@ -118,6 +118,10 @@ so a later request cannot inherit an older registrar or operation classification
   mutation/application-launch methods and standalone clipboard read/write. Multiline `type_text`
   rechecks Control before focus, clipboard-write before clipboard publication, and Control again
   before Ctrl+V delivery.
+- A dedicated multiline-paste regression revokes Control after clipboard publication but before
+  Ctrl+V. It proves the clipboard write occurs exactly once, the final keypress is not dispatched,
+  and the failure preserves `Clipboard text was replaced; paste delivery is not confirmed` so the
+  model is not encouraged to retry the whole operation blindly.
 - Hosted Linux/Windows CI and the repository maintainer's exact-final-SHA self-review are still
   required before merge and will be recorded on the pushed review head. CodeRabbit remains an
   additional automated review signal, not a substitute for the maintainer's review judgment.
