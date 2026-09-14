@@ -1029,31 +1029,33 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               'TOOL_DISABLED: download_artifact is disabled by the current Octo Chat permissions. Ask the user to enable saving ChatGPT files in the app.'
             );
           }
-          try {
-            const saved = await downloadArtifactFile(ctx.roots, requestedPath, file, {
-              maxFileBytes: getConfig().artifacts.maxFileBytes
-            });
-            noteChange({ path: saved.virtual, added: 0, removed: 0, approximate: true });
-            logInfo(`tool download_artifact ${saved.virtual} (${formatBytes(saved.size)}, ${saved.sha256})`);
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: `Saved ${saved.virtual} (${formatBytes(saved.size)}, ${saved.sha256}).`
-                }
-              ],
-              structuredContent: { path: saved.virtual, size: saved.size, sha256: saved.sha256 }
-            };
-          } catch (error) {
-            if (
-              error instanceof ArtifactFetchError ||
-              error instanceof ArtifactTargetError ||
-              error instanceof SandboxError
-            ) {
-              return fail(`download_artifact failed: ${error.message}`);
+          return reg.enforcePolicy('download_artifact:remote', { kind: 'none' }, async () => {
+            try {
+              const saved = await downloadArtifactFile(ctx.roots, requestedPath, file, {
+                maxFileBytes: getConfig().artifacts.maxFileBytes
+              });
+              noteChange({ path: saved.virtual, added: 0, removed: 0, approximate: true });
+              logInfo(`tool download_artifact ${saved.virtual} (${formatBytes(saved.size)}, ${saved.sha256})`);
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: `Saved ${saved.virtual} (${formatBytes(saved.size)}, ${saved.sha256}).`
+                  }
+                ],
+                structuredContent: { path: saved.virtual, size: saved.size, sha256: saved.sha256 }
+              };
+            } catch (error) {
+              if (
+                error instanceof ArtifactFetchError ||
+                error instanceof ArtifactTargetError ||
+                error instanceof SandboxError
+              ) {
+                return fail(`download_artifact failed: ${error.message}`);
+              }
+              throw error;
             }
-            throw error;
-          }
+          });
         })
     );
   }
@@ -1069,13 +1071,13 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       description: 'For Astra only, when explicitly requested by a user prompt. Call near actual completion, after implementing the requested work. Receives queued instructions; complete and verify them before calling again. Do not use for progress updates or queue collection. While HELD with no work remaining, call to wait. Each call waits at most 25 seconds.',
       inputSchema: z.object({ summary: z.string().min(1).max(1000) }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
-    })), async ({ summary }) => {
+    })), async ({ summary }) => reg.enforcePolicy('session_finish', { kind: 'none' }, async () => {
       if (!getConfig().ui.finishTool) return { content: [{ type: 'text' as const, text: 'RELEASED: The user disabled finish hold. You may write your final answer.' }] };
       const caller = currentCaller();
       if (!caller.sessionId || !caller.conversationId) return failIdentity('Exact session identity is required');
       if (goalWorkerChat(caller.conversationId)) return fail('Session finish hold is not applicable to workers or decision helpers. Workers report with agents action=finish; decision helpers answer normally.');
       return guard('session_finish', async () => ({ content: [{ type: 'text', text: await announceSessionFinish(caller.sessionId!, summary) }] }));
-    });
+    }));
   }
 
 
@@ -1248,7 +1250,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
       // and recordToolCall look for it under another, leaving the first request permanently
       // reserved until TTL and breaking the very next worker control call.
       const startedAt = currentCall()?.startedAt ?? Date.now();
-      return guard('agents', async () => {
+      return guard('agents', async () => reg.enforcePolicy('agents', { kind: 'none' }, async () => {
         if (!reg.agentToolsLive) return reg.featureDisabled('Multi-agent mode', 'Multi-agent mode (experimental)');
 
         if (input.action === 'spawn') {
@@ -1537,7 +1539,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
             }))
           }
         };
-      });
+      }));
     }
   );
 }

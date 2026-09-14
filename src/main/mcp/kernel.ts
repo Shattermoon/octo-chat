@@ -27,7 +27,7 @@ import { beginToolTiming, inboundRequestId, inboundPublication } from './inbound
 import { McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Capabilities, Root } from '../../shared/types.js';
-import { CAPABILITY_LABELS, WRITE_CAPABILITIES } from '../../shared/types.js';
+import { CAPABILITY_LABELS } from '../../shared/types.js';
 import { FsOpError, formatBytes, type FileInfo } from '../fsops.js';
 import { logInfo, logWarn } from '../logger.js';
 import { toolSchema } from './tool-declarations.js';
@@ -1128,6 +1128,8 @@ export interface SurfaceRegistrar {
   guarded(cap: keyof Capabilities, name: string, fn: () => Promise<ToolResult>): Promise<ToolResult>;
   /** Central action-policy decision for manual/composite gates that retain custom refusal text. */
   authorize(name: string, requirement: ActionRequirement): ActionPolicyDecision;
+  /** Runs `fn` only when the central action policy allows this operation. */
+  enforcePolicy(name: string, requirement: ActionRequirement, fn: () => Promise<ToolResult>): Promise<ToolResult>;
   /** Refusal used when a whole feature is off but its tool is still exposed. */
   featureDisabled(feature: string, setting: string): ToolResult;
   /** Names actually registered on this server, in registration order. */
@@ -1218,6 +1220,18 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     authorize(name, requirement) {
       return authorizeToolAction(ctx, surface, name, requirement);
     },
+    enforcePolicy(name, requirement, fn) {
+      const decision = this.authorize(name, requirement);
+      if (decision.effect === 'deny') {
+        const displayName = name.split(':', 1)[0] ?? name;
+        return Promise.resolve(fail(
+          decision.reasonCode === 'read_only'
+            ? `TOOL_DISABLED: ${displayName} is disabled because Read-only mode is on. Ask the user to turn Read-only off in the app, then retry.`
+            : `TOOL_DISABLED: ${displayName} is denied by the current Octo Chat policy. Ask the user to review the app permissions and retry.`
+        ));
+      }
+      return fn();
+    },
     invokeNested(name, args, parent) {
       return dispatch(name, args, parent.caller.transportKey, parent.caller.requestId, surface, async () => {
         const entry = handlers.get(name);
@@ -1256,7 +1270,7 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
           // The effective capability can be off because Read-only overrides its checkbox.
           // Name that owner, otherwise use the same permission label as Settings.
           return fail(
-            ctx.readOnly && WRITE_CAPABILITIES.includes(cap)
+            decision.reasonCode === 'read_only'
               ? `TOOL_DISABLED: ${name} is disabled because Read-only mode is on. Ask the user to turn Read-only off in the app, then retry.`
               : `TOOL_DISABLED: ${name} requires the "${CAPABILITY_LABELS[cap]}" permission. Ask the user to enable "${CAPABILITY_LABELS[cap]}" in the app, then retry.`
           );

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   actionIntentFor,
   evaluateActionPolicy,
@@ -43,6 +43,16 @@ describe('central action policy', () => {
       .toEqual({ actionClass: 'launch-application', target: 'application' });
     expect(actionIntentFor('desktop', 'write_clipboard', { kind: 'capability', capability: 'clipboardWrite' }))
       .toEqual({ actionClass: 'clipboard-write', target: 'clipboard' });
+    expect(actionIntentFor('core', 'session', { kind: 'none' }))
+      .toEqual({ actionClass: 'read-data', target: 'application-state' });
+    expect(actionIntentFor('core', 'update_plan', { kind: 'none' }))
+      .toEqual({ actionClass: 'write-data', target: 'application-state' });
+    expect(actionIntentFor('core', 'agents', { kind: 'none' }))
+      .toEqual({ actionClass: 'write-data', target: 'application-state' });
+    expect(actionIntentFor('core', 'session_finish', { kind: 'none' }))
+      .toEqual({ actionClass: 'write-data', target: 'application-state' });
+    expect(actionIntentFor('core', 'download_artifact:remote', { kind: 'none' }))
+      .toEqual({ actionClass: 'remote-read', target: 'external-integration' });
     // Upstream plugin annotations are not an authorization fact; arbitrary dynamic tools remain
     // conservative until a reviewed typed integration can prove a read-only contract.
     expect(actionIntentFor('plugins', 'provider_read_like_name', { kind: 'none' }))
@@ -57,7 +67,13 @@ describe('central action policy', () => {
     }, requirement);
     expect(allowed).toMatchObject({
       effect: 'allow', reasonCode: 'allowed',
-      effectiveAuthority: { sourceSurface: 'core', actionClass: 'execute-process', target: 'process', requiredCapabilities: ['command'] },
+      effectiveAuthority: {
+        sourceSurface: 'core',
+        actionClass: 'execute-process',
+        target: 'process',
+        capabilityMode: 'single',
+        requiredCapabilities: ['command']
+      },
       auditMetadata: { operationId: 'exec_command', principal: 'session' }
     });
 
@@ -68,10 +84,31 @@ describe('central action policy', () => {
     expect(denied.reasonCode).toBe('capability_disabled');
   });
 
+  it('records any-capability authority as alternatives rather than an ambiguous capability list', () => {
+    const requirement = {
+      kind: 'any-capability',
+      capabilities: ['read', 'browse', 'metadata']
+    } as const;
+    const action = context('core', 'read', requirement);
+    const decision = evaluateActionPolicy(action, {
+      capabilities: { ...DEFAULT_CAPABILITIES, read: false, browse: true, metadata: false },
+      readOnly: false
+    }, requirement);
+
+    expect(decision).toMatchObject({
+      effect: 'allow',
+      reasonCode: 'allowed',
+      effectiveAuthority: {
+        capabilityMode: 'any',
+        requiredCapabilities: ['read', 'browse', 'metadata']
+      }
+    });
+  });
+
   it('distinguishes a read-only override from an independently disabled read permission', () => {
     const command = { kind: 'capability', capability: 'command' } as const;
     expect(evaluateActionPolicy(context('core', 'exec_command', command), {
-      capabilities: { ...DEFAULT_CAPABILITIES, command: false }, readOnly: true
+      capabilities: { ...DEFAULT_CAPABILITIES, command: true }, readOnly: true
     }, command).reasonCode).toBe('read_only');
 
     const observe = { kind: 'capability', capability: 'screen' } as const;
@@ -111,5 +148,76 @@ describe('central action policy', () => {
       decision: { effect: 'deny', reasonCode: 'capability_disabled' },
       action: { sourceSurface: 'core', actionClass: 'execute-process', target: { kind: 'process' }, capability: 'command' }
     });
+  });
+
+  it('routes Core application-state adapters through policy before their existing feature gates', async () => {
+    const observed: ActionContext[] = [];
+    const ctx = {
+      roots: [],
+      readOnly: false,
+      caps: { ...DEFAULT_CAPABILITIES },
+      exposedCaps: { ...DEFAULT_CAPABILITIES },
+      sessionTools: false,
+      agentTools: false,
+      exposedSessionTools: true,
+      exposedAgentTools: true,
+      exposedFinishTool: false,
+      onActionPolicyDecision: (_decision: import('../src/main/action-policy.js').ActionPolicyDecision, action: ActionContext) =>
+        observed.push(action)
+    };
+    const registrar = createRegistrar(null, ctx, 'core');
+    const handlers = new Map<string, (input: any) => Promise<ToolResult>>();
+    registrar.register = (name, _config, handler) => handlers.set(name, handler);
+    registerCoreTools(registrar);
+
+    await handlers.get('session')!({ action: 'search' });
+    await handlers.get('update_plan')!({ plan: [] });
+    await handlers.get('agents')!({ action: 'status' });
+
+    expect(observed.map(action => ({ operationId: action.operationId, actionClass: action.actionClass, target: action.target.kind })))
+      .toEqual([
+        { operationId: 'session', actionClass: 'read-data', target: 'application-state' },
+        { operationId: 'update_plan', actionClass: 'write-data', target: 'application-state' },
+        { operationId: 'agents', actionClass: 'write-data', target: 'application-state' }
+      ]);
+  });
+
+  it('stops an application-state handler when the central policy denies it', async () => {
+    const ctx = {
+      roots: [],
+      readOnly: false,
+      caps: { ...DEFAULT_CAPABILITIES },
+      exposedCaps: { ...DEFAULT_CAPABILITIES },
+      sessionTools: false,
+      agentTools: false,
+      exposedSessionTools: true,
+      exposedAgentTools: false,
+      exposedFinishTool: false
+    };
+    const registrar = createRegistrar(null, ctx, 'core');
+    const featureDisabled = vi.fn(registrar.featureDisabled);
+    registrar.featureDisabled = featureDisabled;
+    registrar.authorize = () => ({
+      effect: 'deny',
+      reasonCode: 'capability_disabled',
+      effectiveAuthority: {
+        sourceSurface: 'core',
+        actionClass: 'read-data',
+        target: 'application-state',
+        capabilityMode: 'none',
+        requiredCapabilities: []
+      },
+      auditMetadata: { operationId: 'session', principal: 'unknown' }
+    });
+    let session: ((input: any) => Promise<ToolResult>) | null = null;
+    registrar.register = (name, _config, handler) => {
+      if (name === 'session') session = handler;
+    };
+    registerCoreTools(registrar);
+
+    const result = await session!({ action: 'search' });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('denied by the current Octo Chat policy');
+    expect(featureDisabled).not.toHaveBeenCalled();
   });
 });

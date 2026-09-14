@@ -44,6 +44,7 @@ export type ActionTargetKind = (typeof ACTION_TARGET_KINDS)[number];
 
 /** Identity facts proved by the request/call owners, never model-supplied credentials. */
 export interface Principal {
+  /** Point-in-time identity evidence at policy evaluation; later subsystem proof may strengthen it. */
   readonly conversationId: string | null;
   readonly localSessionId: string | null;
   readonly requestId: string | null;
@@ -82,6 +83,8 @@ export interface ActionPolicyDecision {
     readonly sourceSurface: ActionSourceSurface;
     readonly actionClass: ActionClass;
     readonly target: ActionTargetKind;
+    /** How `requiredCapabilities` must be interpreted by diagnostics and later policy consumers. */
+    readonly capabilityMode: 'none' | 'single' | 'any';
     readonly requiredCapabilities: readonly Capability[];
   };
   /** Content-free facts suitable for the later diagnostics surface. */
@@ -180,6 +183,10 @@ export function actionIntentFor(
     return { actionClass: 'remote-mutate', target: 'external-integration' };
   }
 
+  if (sourceSurface === 'core' && operationId === 'download_artifact:remote') {
+    return { actionClass: 'remote-read', target: 'external-integration' };
+  }
+
   const [operation, subeffect] = operationId.split(':', 2);
   if (subeffect) {
     const requiredIntent = intentFromRequirements(requirement);
@@ -213,6 +220,12 @@ function authority(context: ActionContext, requirement: ActionRequirement): Acti
     sourceSurface: context.sourceSurface,
     actionClass: context.actionClass,
     target: context.target.kind,
+    capabilityMode:
+      requirement.kind === 'none'
+        ? 'none'
+        : requirement.kind === 'capability'
+          ? 'single'
+          : 'any',
     requiredCapabilities: [...requirementCapabilities(requirement)]
   };
 }
@@ -244,17 +257,21 @@ export function evaluateActionPolicy(
   }
 
   const required = requirementCapabilities(requirement);
+  const readOnlyOverride = state.readOnly && required.length > 0 && required.every(capability =>
+    WRITE_CAPABILITIES.includes(capability)
+  );
+  if (readOnlyOverride) {
+    return { effect: 'deny', reasonCode: 'read_only', effectiveAuthority, auditMetadata };
+  }
+
   const allowed = requirement.kind === 'capability'
     ? state.capabilities[requirement.capability]
     : required.some(capability => state.capabilities[capability]);
   if (allowed) return { effect: 'allow', reasonCode: 'allowed', effectiveAuthority, auditMetadata };
 
-  const readOnlyOverride = state.readOnly && required.length > 0 && required.every(capability =>
-    WRITE_CAPABILITIES.includes(capability)
-  );
   return {
     effect: 'deny',
-    reasonCode: readOnlyOverride ? 'read_only' : 'capability_disabled',
+    reasonCode: 'capability_disabled',
     effectiveAuthority,
     auditMetadata
   };

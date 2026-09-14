@@ -76,7 +76,7 @@ it('names the actual Settings permission when a capability is revoked', async ()
 
 it.each(WRITE_CAPABILITIES)('explains the Read-only override for %s without running it', async cap => {
   const action = vi.fn(async () => ok('changed'));
-  const result = await registrar(true, { [cap]: false }).guarded(cap, 'mutation', action);
+  const result = await registrar(true, { [cap]: true }).guarded(cap, 'mutation', action);
   expect(result.isError).toBe(true);
   expect(JSON.stringify(result)).toContain('Read-only mode is on');
   expect(JSON.stringify(result)).toContain('turn Read-only off');
