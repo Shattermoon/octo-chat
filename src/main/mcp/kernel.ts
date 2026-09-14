@@ -602,7 +602,6 @@ async function dispatchTracked(
   // before the shared blocked/superseded checks rather than guessing from selection.
   // Observation and its dependent input must resolve the same caller before either
   // handler runs. Recording a late identity cannot recover a discarded anonymous frame.
-  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
   const desktopContext = surface === 'desktop' && (name === 'get_window_state' ||
     (WINDOWS_COMPUTER_STATE_INPUT_METHODS as readonly string[]).includes(name));
   const desktopPrincipal = surface === 'desktop' && desktopNeedsExactPrincipal(name, args);
@@ -749,6 +748,7 @@ async function dispatchTracked(
   // chat over to `superseded`, chat A gets no tool at all, and each refusal tells the model
   // the only thing it can usefully do is write the brief.
   const compacting = !blockedChat && compactingConversation(context.caller.conversationId) !== null;
+  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
   const retiredLeaseAmbiguous =
     !allowUnattributed && hasRetiredWorkerLeases() && !context.caller.conversationId;
   const dormantLeaseAmbiguous =

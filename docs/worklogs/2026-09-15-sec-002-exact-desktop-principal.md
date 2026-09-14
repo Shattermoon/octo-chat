@@ -39,6 +39,9 @@ call's request correlation:
 No active-tab, latest-session, friendly agent name, or sole-candidate fallback can replace those
 facts. Direct calls get a bounded chance to acquire late request correlation before policy runs;
 code-mode children inherit the proven parent caller and re-enter a freshly built live registrar.
+The unrelated `allowUnattributedCalls` setting is still read at its original post-identity-wait
+point, so this PR does not accidentally snapshot that live Core/agent setting earlier while it
+waits for browser evidence.
 
 The central policy owns this product decision. Existing lower owners remain authoritative below
 it: Windows caller-local observation state, native frame/ref generations and geometry checks,
@@ -64,7 +67,7 @@ browser-chord protections, native helper generations, live capability checks and
 ## Validation
 
 - `npm run typecheck` passed.
-- Focused security/regression set passed: 8 files, 111/111 tests.
+- Focused security/regression set plus the complete agents suite passed: 9 files, 264/264 tests.
 - Full MCP integration passed: 173 passed / 6 platform-skipped.
 - Renderer settings/layout coverage passed: 77/77 tests.
 - `npm run verify:notices` passed: 93 production packages, 7 catalog entries and 730 pinned
