@@ -1894,7 +1894,7 @@ npm run verify:notices
 npm run verify
 npm run build
 npm run dist                       # current OS, x64 + arm64
-npm run dist:dir:mac:x64            # example unpacked target on a matching host
+npm run dist:dir:linux:x64          # example unpacked supported target on a matching host
 ```
 
 Use `npm ci` for an intentionally needed reproducible dependency install, not as routine
@@ -1902,13 +1902,18 @@ cleanup of this shared tree. `verify:ci` fetches rg, checks privacy/notices/nati
 typechecks, verifies Electron resolves, runs Vitest excluding `mcp-shutdown`, then runs that
 socket-drain suite alone. `vitest.config.ts` forces Node, bounded hooks/tests, `CLF_BRIDGE_PORTS=0`
 and test-only `CLF_EVIDENCE_MS=1500`; never let tests contact the installed production bridge.
-Opt-in live plugin/macOS probes are separate evidence, not implied by the ordinary suite.
+Opt-in live plugin and legacy macOS probes are separate evidence, not implied by the ordinary suite.
 
 When delegation is authorized, reuse a suitable worker. Give each assignment the project,
 concrete task, evidence, allowed files, ownership boundaries, checks and expected handoff.
-Use at most two direct development subagents concurrently and explicitly prohibit nested
+Use at most four direct development subagents concurrently and explicitly prohibit nested
 delegation. Audit-only means no source/test/config/AppData writes beyond the named report.
 The prime independently verifies important claims; parallel reports are hypotheses, not votes.
+
+For the current hardening program, use `docs/octo-chat-full-audit-2026-09-14.md` as the finding
+basis and `docs/remediation-program-2026-09-14.md` as the dependency/ownership/PR plan. Earlier
+engineering audits and worklogs are archived under `docs/old docs-report/`; they are historical
+evidence, not current implementation authority.
 
 When integrating external PRs, preserve original authorship. Adapted or snapshot-integrated
 work must name the original PR/author and carry appropriate GitHub-linked `Co-authored-by`
@@ -1929,9 +1934,10 @@ diagnostics, not restart authority; secrets must never be printed to investigate
 ## 20. Build, installation, updater and release
 
 Source, bundle, package, installed bytes and live behavior are separate gates (§3). The app id
-is `com.octochat.app`. Native release targets are Windows x64/arm64 NSIS, macOS x64/arm64
-DMG+ZIP and Linux x64/arm64 AppImage+DEB. Windows is per-user-capable and `asInvoker`; replacing
-the package preserves userData. Synchronize package/main/extension versions deliberately.
+is `com.octochat.app`. Current native release targets are Windows x64/arm64 NSIS and Linux
+x64/arm64 AppImage+DEB. macOS publication is paused; remaining macOS source/build helpers are
+legacy cleanup scope rather than a supported release target. Windows is per-user-capable and
+`asInvoker`; replacing the package preserves userData. Synchronize package/main/extension versions deliberately.
 
 `electron-vite` builds main/preload/renderer into `out/`; extension files ship directly without
 a bundler. `electron-builder.yml` puts executable tunnel/rg, extension and required native

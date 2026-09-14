@@ -2,7 +2,7 @@
 
 **A local ChatGPT coding workspace with MCP tools, durable sessions, reusable workers, Goal/Loop automation, plugins, and optional Windows desktop control.**
 
-[Releases](https://github.com/Shattermoon/octo-chat/releases) · [Setup](docs/setup.md) · [Plugins](docs/plugins.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[Releases](https://github.com/Shattermoon/octo-chat/releases) · [Setup](docs/setup.md) · [Plugins](docs/plugins.md) · [Security](SECURITY.md) · [Audit](docs/octo-chat-full-audit-2026-09-14.md) · [Remediation plan](docs/remediation-program-2026-09-14.md) · [Contributing](CONTRIBUTING.md)
 
 Octo Chat runs on your computer and gives ChatGPT a set of local MCP connectors. Core handles approved project files and terminal work, Desktop adds native Windows automation when you explicitly enable it, and Plugins exposes external MCP integrations you install in the app.
 
@@ -98,6 +98,8 @@ Octo Chat stores session history locally when recording is enabled. API keys and
 Focused bug reports and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), and use GitHub's private vulnerability reporting for security issues.
 
 Earlier community work incorporated before the clean Octo Chat public-history reset is credited in [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
+The current engineering hardening program is tracked in the [2026-09-14 remediation plan](docs/remediation-program-2026-09-14.md), based on the [authoritative full audit](docs/octo-chat-full-audit-2026-09-14.md). Earlier audits and worklogs are retained under [`docs/old docs-report/`](<docs/old docs-report/>) for historical context.
 
 ## License
 

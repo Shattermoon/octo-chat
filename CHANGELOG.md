@@ -51,7 +51,7 @@ the app refuses the extension and asks you to reload the matching copy.
 - Durable browser handoffs and queued-input ownership across Compact & Resume; retained waiting/sleeping chats and bounded retirement of completed helpers.
 
 See [the full release notes](docs/release-notes/v2.0.8.md). Binary publication still requires
-the native source and artifact-notice checks described in [the audit](docs/plugin-notice-audit.md).
+the native source and artifact-notice checks described in [the audit](<docs/old docs-report/plugin-notice-audit.md>).
 
 ## Earlier unreleased fixes
 
@@ -442,7 +442,7 @@ Windows/macOS/Linux build matrix can be published under a fresh tag instead of t
 This is the post-2.0 hardening pass. It is unusually broad because it combines the reusable-worker
 rewrite, a live transcript/Goal investigation, session-store recovery work, the first Computer Use
 overhaul tranche, and an adversarial restart/race audit. The detailed engineering log is in
-`docs/bughunt-2026-08-25.md`.
+`docs/old docs-report/bughunt-2026-08-25.md`.
 
 ### Added
 - **Workers are reusable ChatGPT conversations.** A worker that finishes normally now sleeps,
@@ -662,7 +662,7 @@ against the removed internals, or against the old pass-through behaviour, will n
   wrapper, and two dead MCP formatting exports.
 
 ### Fixed
-Full write-up, defect by defect, in `docs/bughunt-follow-up-2026-08-24.md`. Credible leads that
+Full write-up, defect by defect, in `docs/old docs-report/bughunt-follow-up-2026-08-24.md`. Credible leads that
 were reviewed but not reproducible enough to fix are tracked privately rather than published, as
 `SECURITY.md` and the documentation rule in `AGENTS.md` require.
 
@@ -767,8 +767,8 @@ were reviewed but not reproducible enough to fix are tracked privately rather th
   worth spending a token on is asking it to think before it starts.
 
 ### Fixed
-Full write-up, with what each defect actually did, in `docs/bug-audit-2026-08-23.md` and
-`docs/bug-audit-2026-08-24.md` — the second pass audited the merged tree for ordering at the
+Full write-up, with what each defect actually did, in `docs/old docs-report/bug-audit-2026-08-23.md` and
+`docs/old docs-report/bug-audit-2026-08-24.md` — the second pass audited the merged tree for ordering at the
 crash, reload and navigation boundaries, where several of these were correct a second later and
 wrong at the moment a caller decides whether its operation happened.
 
