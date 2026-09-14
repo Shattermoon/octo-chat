@@ -82,7 +82,7 @@
     "notices": [
       {
         "file": "heygen-SERVICE-NOTICE",
-        "sha256": "bf30ee8d88c444513e430315cd3d2d6d9ef98eb0073a30305a4ad2bf8b9a2fe2"
+        "sha256": "131820702cafde1af80e14f95fcc1daa3e9d37f5078258e8339390c55a268d61"
       }
     ],
     "checkedOn": "2026-09-08",
@@ -98,7 +98,7 @@
     "notices": [
       {
         "file": "recraft-SERVICE-NOTICE",
-        "sha256": "9ecba00599d77b5c2ca2ff039218ec643f2cb6ad0208a93295e4b6fd791e4dcf"
+        "sha256": "62f484f89cb31f76892b80cea0990260d6ab097790fdc796f68752bd0e89918e"
       }
     ],
     "checkedOn": "2026-09-08",

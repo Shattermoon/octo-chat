@@ -141,7 +141,9 @@ it('renders the two observed Pro generations separately and sends their exact se
   expect(slider.getAttribute('aria-valuetext')).toBe('GPT-6 Pro');
   expect(confirmedComposerModel()).toEqual({ model: 'gpt-6-pro', reasoningEffort: 'pro' });
   slider.value = '1'; slider.dispatchEvent(new dom.window.Event('input'));
-  expect(dom.window.document.getElementById('contextMeterInfo')!.textContent).toMatch(/Auto-compaction at 400[,.]000 tokens/);
+  expect(dom.window.document.getElementById('contextMeterInfo')!.textContent).toContain(
+    `Auto-compaction at ${400_000..toLocaleString()} tokens`
+  );
 });
 
 it('replaces loading with the backend failure reason and an enabled retry control', async () => {
