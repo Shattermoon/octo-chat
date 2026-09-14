@@ -488,6 +488,12 @@ export function registerMacOSDesktopTools(reg: SurfaceRegistrar): void {
                     : 'CALLER_IDENTITY_REQUIRED: replacing the clipboard requires exact companion request/chat/session identity. Retry after the companion reconnects; no clipboard data was changed.'
               );
             }
+            if (decision.reasonCode === 'read_only') {
+              throw new ComputerError(
+                `TOOL_DISABLED: computer is disabled because Read-only mode is on. ` +
+                'Ask the user to turn Read-only off in the app, then retry.'
+              );
+            }
             throw new ComputerError(
               effect === 'desktop'
                 ? 'TOOL_DISABLED: mouse and keyboard control is disabled by the current Octo Chat permissions. Ask the user to enable "Control mouse and keyboard" in the app, then retry.'

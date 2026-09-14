@@ -48,6 +48,11 @@ paused therefore applies to that same call rather than being frozen at request s
 The central policy owns this product decision. Existing lower owners remain authoritative below
 it: Windows caller-local observation state, native frame/ref generations and geometry checks,
 browser-chord protections, native helper generations, live capability checks and Read-only mode.
+For supported Windows mutation/application-launch/clipboard work and retained macOS composite
+mutation/clipboard work, live capability, Read-only and caller-lifecycle authority is revalidated
+at the final native or Electron side-effect boundary after relevant browser/window/helper-queue
+waits. Windows passes this preflight per invocation rather than storing it on the cached caller API,
+so a later request cannot inherit an older registrar or operation classification.
 
 ## Covered actions
 
@@ -87,6 +92,15 @@ browser-chord protections, native helper generations, live capability checks and
   native source archives/patches validated.
 - `npm run verify:privacy` passed: public-history privacy gate clean on the local branch.
 - `git diff --check` passed.
+- Final Windows review repair passed `npm run typecheck` plus 10 focused Desktop/policy/code-mode
+  files: 154 passed / 7 platform-skipped. The regressions hold Windows browser-chord/window awaits
+  while Control, Read-only or caller lifecycle changes; hold direct clipboard work before its final
+  preflight; prove per-call Windows API preflight forwarding; and prove a queued clipboard write
+  rechecks authority after an earlier exclusive action releases.
+- The Windows adapter now permits a shared unattributed cached context only for read/observation
+  methods. Mutation and application-launch paths require exact identity locally as well as through
+  the central policy seam, so `Allow unattributed calls` cannot become a fallback input principal if
+  a higher-level guard is bypassed.
 - A full local `npm run verify` on the review-repair working tree reproduced the already-tracked
   CI-001 aggregate contamination: 11 failures among 4,441 tests, spread across code-mode timing,
   Windows live UIA/capture environment, exec-hints timing, MCP glob-scan timing and session-finish
@@ -100,6 +114,10 @@ browser-chord protections, native helper generations, live capability checks and
   browser-chord await, after local waits, after helper queue/startup, and immediately before native
   helper send or Electron clipboard I/O. Mid-batch revocation preserves completed-count/failure-index
   evidence and uses no-retry-safe wording instead of falsely claiming that nothing ran.
+- The supported Windows surface now uses the same final-boundary authority invariant for all nine
+  mutation/application-launch methods and standalone clipboard read/write. Multiline `type_text`
+  rechecks Control before focus, clipboard-write before clipboard publication, and Control again
+  before Ctrl+V delivery.
 - Hosted Linux/Windows CI and the repository maintainer's exact-final-SHA self-review are still
   required before merge and will be recorded on the pushed review head. CodeRabbit remains an
   additional automated review signal, not a substitute for the maintainer's review judgment.

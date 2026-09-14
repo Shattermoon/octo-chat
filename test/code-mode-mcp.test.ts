@@ -220,7 +220,10 @@ it.runIf(process.platform === 'win32')('routes attributed sky through Desktop MC
   const publicWindow = { app: window.app, id: window.id, title: window.title };
   const clicked = await rpc('tools/call', { name: 'exec', arguments: { code: `await sky.click({window:${JSON.stringify(publicWindow)},element_index:0}); text("accepted");` } }, who.requestId, 'desktop');
   expect(text(clicked)).toBe('accepted');
-  expect(action).toHaveBeenCalledExactlyOnceWith([{ type: 'click_ref', ref: 'fixture-ref', button: 'left', count: 1 }], { window: 77, app: 'fixture.exe' });
+  expect(action).toHaveBeenCalledExactlyOnceWith(
+    [{ type: 'click_ref', ref: 'fixture-ref', button: 'left', count: 1 }],
+    { window: 77, app: 'fixture.exe', beforeSideEffect: expect.any(Function) }
+  );
   expect(callers).toEqual([who.session.id, who.session.id]);
   ctx.caps = { ...ctx.caps, control: false };
   const revoked = await rpc('tools/call', { name: 'exec', arguments: { code: `await sky.activate_window({window:${JSON.stringify(publicWindow)}}); text("should not run");` } }, who.requestId, 'desktop');

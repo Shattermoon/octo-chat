@@ -71,4 +71,31 @@ describe('desktop local-only action path', () => {
     expect(mocks.writeText).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
+
+  it('rechecks clipboard authority after waiting behind an earlier exclusive action', async () => {
+    let releaseFirst!: () => void;
+    mocks.writeText.mockImplementationOnce(() => new Promise<void>(resolve => { releaseFirst = resolve; }));
+    const first = act([{ type: 'write_clipboard', text: 'first' }]);
+    await vi.waitFor(() => expect(mocks.writeText).toHaveBeenCalledTimes(1));
+
+    let allowed = true;
+    const second = act(
+      [{ type: 'write_clipboard', text: 'must-not-land' }],
+      {
+        beforeSideEffect: async effect => {
+          if (effect === 'clipboard-write' && !allowed) throw new Error('CLIPBOARD_AUTHORITY_REVOKED');
+        }
+      }
+    );
+    const rejected = expect(second).rejects.toThrow(/CLIPBOARD_AUTHORITY_REVOKED/);
+    void rejected.catch(() => {});
+    allowed = false;
+    releaseFirst();
+
+    await first;
+    await rejected;
+    expect(mocks.writeText).toHaveBeenCalledTimes(1);
+    expect(mocks.writeText).toHaveBeenCalledWith('first');
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
 });
