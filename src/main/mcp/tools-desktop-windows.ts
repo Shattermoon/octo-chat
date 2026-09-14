@@ -27,7 +27,11 @@ const MAX_CONTEXTS = 32;
 
 function apiForCaller(method: string): WindowsComputerApi {
   const caller = currentCall()?.caller;
-  const exactPrincipal = caller?.sessionId ? `session:${caller.sessionId}`
+  // Observation authority is owned by the exact live chat attachment, not merely the durable
+  // local session. Compact & Resume deliberately keeps the same session while rebinding it from
+  // conversation A to B; B must not inherit A's frame ids, element indexes or window geometry.
+  const exactPrincipal = caller?.sessionId && caller?.conversationId
+    ? `session:${caller.sessionId}:chat:${caller.conversationId}`
     : caller?.conversationId ? `chat:${caller.conversationId}`
       : null;
   const principal = exactPrincipal

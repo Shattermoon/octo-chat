@@ -387,6 +387,15 @@ export async function assertCurrentCallLifecycle(): Promise<void> {
   if (attachment === 'superseded') {
     throw new ComputerError(midCallLifecycleRefusal(CONVERSATION_SUPERSEDED_REFUSAL));
   }
+  if (attachment !== 'current') {
+    // Session-history deletion is not a permanent Block: a later request may establish a fresh
+    // exact attachment. But this in-flight sensitive call can no longer prove that the
+    // request/chat/session Principal captured at admission is still current at its effect boundary.
+    throw new IdentityLostError(
+      'CALLER_IDENTITY_REQUIRED: this Desktop call no longer has its exact current session/chat attachment. ' +
+      'Retry after the companion establishes a current attachment; no further Desktop or clipboard side effect ran.'
+    );
+  }
 }
 
 function desktopNeedsExactPrincipal(name: string, args: unknown): boolean {

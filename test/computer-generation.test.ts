@@ -312,6 +312,31 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.clipboard.writeText).not.toHaveBeenCalled();
   });
 
+  it('does not mutate clipboard when a pinned ref owner retires during the final authority preflight', async () => {
+    const state = await computer.getWindowState({ window: 77 });
+    const sent = fake.requests.length;
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      if (effect !== 'clipboard-write') return;
+      // The policy/lifecycle preflight is allowed to await. If the native owner exits in that
+      // interval, the clipboard effect must not continue under the now-stale observation.
+      await Promise.resolve();
+      fake.children.at(-1)!.close();
+    });
+
+    await expect(computer.act([
+      { type: 'write_clipboard', text: 'must not replace' },
+      { type: 'click_ref', ref: state.elements[0]!.ref }
+    ], { beforeSideEffect })).rejects.toMatchObject({
+      completedCount: 0,
+      failedIndex: 0,
+      message: expect.stringMatching(/STALE_REF/)
+    });
+
+    expect(beforeSideEffect).toHaveBeenCalledExactlyOnceWith('clipboard-write');
+    expect(fake.clipboard.writeText).not.toHaveBeenCalled();
+    expect(fake.requests).toHaveLength(sent);
+  });
+
   it('rechecks external authority after a local wait before a later native batch', async () => {
     vi.useFakeTimers();
     let allowed = true;
@@ -341,6 +366,24 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(error.message).toContain('No further Desktop or clipboard side effect ran');
     expect(error.message).not.toMatch(/no (?:local )?tool was run|Nothing was run/i);
     expect(beforeSideEffect).toHaveBeenCalledWith('desktop');
+    expect(fake.requests).toHaveLength(sent);
+  });
+
+  it('does not send native input when the selected helper retires during final authority preflight', async () => {
+    await computer.listWindows();
+    const sent = fake.requests.length;
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      if (effect !== 'desktop') return;
+      await Promise.resolve();
+      fake.children.at(-1)!.close();
+    });
+
+    await expect(computer.act(
+      [{ type: 'type', text: 'must not be typed' }],
+      { beforeSideEffect }
+    )).rejects.toThrow(/desktop helper changed/i);
+
+    expect(beforeSideEffect).toHaveBeenCalledExactlyOnceWith('desktop');
     expect(fake.requests).toHaveLength(sent);
   });
 

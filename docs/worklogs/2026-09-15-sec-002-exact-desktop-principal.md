@@ -48,6 +48,9 @@ paused therefore applies to that same call rather than being frozen at request s
 The central policy owns this product decision. Existing lower owners remain authoritative below
 it: Windows caller-local observation state, native frame/ref generations and geometry checks,
 browser-chord protections, native helper generations, live capability checks and Read-only mode.
+Windows observation state is keyed by the stable observe-to-act owner pair
+`(localSessionId, conversationId)`: Compact & Resume can keep the same local session while replacing
+the attached conversation, and the replacement conversation must receive a fresh frame/index cache.
 For supported Windows mutation/application-launch/clipboard work and retained macOS composite
 mutation/clipboard work, live capability, Read-only and caller-lifecycle authority is revalidated
 at the final native or Electron side-effect boundary after relevant browser/window/helper-queue
@@ -122,6 +125,29 @@ so a later request cannot inherit an older registrar or operation classification
   Ctrl+V. It proves the clipboard write occurs exactly once, the final keypress is not dispatched,
   and the failure preserves `Clipboard text was replaced; paste delivery is not confirmed` so the
   model is not encouraged to retry the whole operation blindly.
+- Independent review of the latest CodeRabbit findings found one additional supported-Windows
+  blocker: the observation cache was keyed only by local session, so a replacement conversation
+  after Compact & Resume could reuse the source conversation's Window2 indexes/geometry. The cache
+  is now keyed by both local session and conversation, with a same-session/different-conversation
+  regression. The review also confirmed that `type_text:clipboard` and
+  `type_text:clipboard-write` both classify from the live `clipboardWrite` requirement and therefore
+  enter the same `clipboard-write` exact-Principal policy; the differing suffix text is not an
+  authorization bypass.
+- The same review found a real lower-level generation race for a pinned mixed action whose helper
+  retires while an asynchronous clipboard authority preflight is running. Clipboard read/write now
+  recheck the pinned helper generation after the preflight and immediately before Electron I/O;
+  the regression retires the ref owner inside that final preflight and proves the clipboard is not
+  mutated. Native helper sends likewise recheck that the exact selected runtime is still active
+  after the awaited final-authority callback and before `stdin.write` / worker `postMessage`; a
+  regression retires that runtime inside the callback and proves no native input request is sent.
+- CodeRabbit's final-lifecycle `conversationAttachment(...)=unknown` finding was valid for the
+  in-flight sensitive call. Session-history deletion is not a permanent Block and a later request
+  may establish a fresh exact attachment, but the already-running request can no longer prove that
+  its captured request/chat/session Principal is current at the irreversible boundary. The final
+  lifecycle check now fail-closes that call, with a regression that removes the attachment while the
+  ownership read is pending. ID-001/SES-001 still own the broader deletion/reconstruction generation
+  fence. The SEC-001 worklog-state warning was stale: SEC-001 is already merged on `origin/main`, so
+  its `DONE` state is correct.
 - Hosted Linux/Windows CI and the repository maintainer's exact-final-SHA self-review are still
   required before merge and will be recorded on the pushed review head. CodeRabbit remains an
   additional automated review signal, not a substitute for the maintainer's review judgment.

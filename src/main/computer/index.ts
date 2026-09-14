@@ -727,6 +727,10 @@ async function sendMacOSAddonRequest(
   assertHelperGeneration(runtime.generation, expected);
   if (runtime.pending) throw new ComputerError('macOS Desktop addon received overlapping requests.');
   await beforeSend?.();
+  assertHelperGeneration(runtime.generation, expected);
+  if (!isHelperGenerationActive(runtime.generation)) {
+    throw new ComputerError('The desktop helper changed before the request could be sent.');
+  }
   return new Promise<Record<string, any>>((resolve, reject) => {
     let pending: PendingHelperRequest;
     const timer = setTimeout(() => {
@@ -801,6 +805,10 @@ async function sendHelperRequest(
   assertHelperGeneration(runtime.generation, expected);
   if (runtime.pending) throw new ComputerError('Desktop helper received overlapping requests.');
   await beforeSend?.();
+  assertHelperGeneration(runtime.generation, expected);
+  if (!isHelperGenerationActive(runtime.generation)) {
+    throw new ComputerError('The desktop helper changed before the request could be sent.');
+  }
 
   return new Promise<Record<string, any>>((resolve, reject) => {
     let pending: PendingHelperRequest;
@@ -1877,6 +1885,7 @@ async function actLocked(
         const nativeClipboard = await electronClipboard();
         assertHelperGeneration(helperGeneration, expected);
         await opts.beforeSideEffect?.('clipboard-write');
+        assertHelperGeneration(helperGeneration, expected);
         await nativeClipboard.writeText(action.text);
       } catch (err) {
         throw localActionFailure(err, completedCount, index);
@@ -1909,6 +1918,7 @@ async function actLocked(
         const nativeClipboard = await electronClipboard();
         assertHelperGeneration(helperGeneration, expected);
         await opts.beforeSideEffect?.('clipboard-read');
+        assertHelperGeneration(helperGeneration, expected);
         clipboard.push(await nativeClipboard.readText());
         assertHelperGeneration(helperGeneration, expected);
       } catch (err) {
@@ -1924,6 +1934,7 @@ async function actLocked(
         const nativeClipboard = await electronClipboard();
         assertHelperGeneration(helperGeneration, expected);
         await opts.beforeSideEffect?.('clipboard-write');
+        assertHelperGeneration(helperGeneration, expected);
         await nativeClipboard.writeText(action.text);
       } catch (err) {
         throw localActionFailure(err, completedCount, index);

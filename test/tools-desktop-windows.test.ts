@@ -224,6 +224,25 @@ describe('Windows Desktop public registrar', () => {
     expect(native.apis).toHaveLength(4);
   });
 
+  it('does not lend observation state to a replacement conversation in the same local session', async () => {
+    native.call = {
+      caller: { requestId: 'source-request', conversationId: 'source-chat', sessionId: 'shared-session' }
+    };
+    await surface().call('get_window_state', { window });
+    const source = native.apis[0];
+
+    // Compact & Resume keeps the durable local session id while replacing the attached
+    // conversation. The replacement chat must receive a fresh observation cache.
+    native.call = {
+      caller: { requestId: 'replacement-request', conversationId: 'replacement-chat', sessionId: 'shared-session' }
+    };
+    await surface().call('click', { window, element_index: 2 });
+
+    expect(native.apis).toHaveLength(2);
+    expect(source.click).not.toHaveBeenCalled();
+    expect(native.apis[1].click).toHaveBeenCalledOnce();
+  });
+
   it('preserves native values and literal multiline text without returning user input as success prose', async () => {
     const api = surface();
     await api.call('list_windows');
