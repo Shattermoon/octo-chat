@@ -45,13 +45,13 @@ export function buildServer(ctx: ToolContext, surface: SurfaceId, observe?: (con
     // Match the SDK's Standard Schema conversion target and object-root normalization.
     const schema = toolSchemaJson(config.inputSchema);
     tools.push({ name, description: config.description, inputSchema: { type: 'object', ...schema }, ...(config.annotations ? { annotations: { ...config.annotations } } : {}) });
-  } : undefined);
+  } : undefined, liveContext);
   if (surface === 'core') registerCoreTools(registrar);
   else registerDesktopTools(registrar);
   registerCodeMode(registrar, (name, args, parent) => {
     // Reuse the same registration/validation/handler authority, refreshed for every child
     // so a permission or approved-root change during an awaited script takes effect.
-    const nested = createRegistrar(null, liveContext(), surface);
+    const nested = createRegistrar(null, liveContext(), surface, undefined, liveContext);
     if (surface === 'core') registerCoreTools(nested);
     else registerDesktopTools(nested);
     return nested.invokeNested(name, args, parent);

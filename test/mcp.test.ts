@@ -1677,7 +1677,23 @@ describe('desktop capabilities', () => {
       expect(failed(reply), `${name}: ${textOf(reply)}`).toBe(true);
       expect(textOf(reply)).not.toContain('WINDOW_NOT_FOUND');
     }
-    const paste = await desktop('tools/call', { name: 'type_text', arguments: { window, text: 'first\nsecond' } });
+    const requestId = 'wfr_desktop_permission_order';
+    const conversationId = 'desktop-permission-order';
+    const session = await createSession({ conversationId, title: 'Desktop permission order' });
+    expect(observeRequestCorrelation({
+      requestId,
+      conversationId,
+      sessionId: session.id,
+      messageId: 'msg-desktop-permission-order',
+      tool: 'type_text',
+      observedAt: Date.now()
+    })).toBe('stored');
+    const pasteBody = JSON.stringify({
+      jsonrpc: '2.0', id: nextId++, method: 'tools/call',
+      params: { name: 'type_text', arguments: { window, text: 'first\nsecond' } }
+    });
+    const pasteRaw = await rawPost(endpoint.urls.desktop, pasteBody, { 'x-request-id': `${requestId}/att1` });
+    const paste = { status: pasteRaw.status, body: decode(pasteRaw) };
     expect(failed(paste)).toBe(true);
     expect(textOf(paste)).toContain('Replace clipboard text permission');
     ctx.caps = withCaps({ control: true });

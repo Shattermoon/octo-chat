@@ -1,10 +1,12 @@
-# REL-001 deterministic release-oracle repair
+# [DONE][REL-001][TEST-001][MCP-001] Deterministic Release-Oracle Repair
 
-**Owner:** Maintainer A
+**Owner:** Repository maintainer
 
 **Branch:** `fix/rel-001-release-oracle`
 
-**Program item:** PR-01 / REL-001, TEST-001, MCP-001 first tranche
+**Audit IDs:** REL-001, TEST-001, MCP-001 (first tranche)
+
+**State:** `DONE`
 
 **Base:** `658cc29` (2.2.0 / bridge 14)
 

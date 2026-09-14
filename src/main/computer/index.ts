@@ -159,6 +159,10 @@ export interface ActionResult {
   routes: ActionRoute[];
 }
 
+/** Product-policy/lifecycle effect classes rechecked by the MCP owner immediately before I/O. */
+export type ComputerSideEffect = 'desktop' | 'clipboard-read' | 'clipboard-write';
+export type ComputerSideEffectPreflight = (effect: ComputerSideEffect) => void | Promise<void>;
+
 export type VerificationSpec =
   | { until: 'foreground'; window: number; timeoutMs?: number }
   | { until: 'window_exists'; match: string; timeoutMs?: number }
@@ -714,10 +718,19 @@ async function startMacOSAddon(): Promise<MacOSAddonRuntime> {
   return macOSAddonStarting;
 }
 
-async function sendMacOSAddonRequest(request: Record<string, unknown>, expected?: ExpectedHelper): Promise<Record<string, any>> {
+async function sendMacOSAddonRequest(
+  request: Record<string, unknown>,
+  expected?: ExpectedHelper,
+  beforeSend?: () => void | Promise<void>
+): Promise<Record<string, any>> {
   const runtime = await startMacOSAddon();
   assertHelperGeneration(runtime.generation, expected);
   if (runtime.pending) throw new ComputerError('macOS Desktop addon received overlapping requests.');
+  await beforeSend?.();
+  assertHelperGeneration(runtime.generation, expected);
+  if (!isHelperGenerationActive(runtime.generation)) {
+    throw new ComputerError('The desktop helper changed before the request could be sent.');
+  }
   return new Promise<Record<string, any>>((resolve, reject) => {
     let pending: PendingHelperRequest;
     const timer = setTimeout(() => {
@@ -782,11 +795,20 @@ export async function stopComputerHelper(): Promise<void> {
   await Promise.allSettled([...helperRetirements]);
 }
 
-async function sendHelperRequest(request: Record<string, unknown>, expected?: ExpectedHelper): Promise<Record<string, any>> {
-  if (useMacOSDesktopAddon()) return sendMacOSAddonRequest(request, expected);
+async function sendHelperRequest(
+  request: Record<string, unknown>,
+  expected?: ExpectedHelper,
+  beforeSend?: () => void | Promise<void>
+): Promise<Record<string, any>> {
+  if (useMacOSDesktopAddon()) return sendMacOSAddonRequest(request, expected, beforeSend);
   const runtime = await startHelper();
   assertHelperGeneration(runtime.generation, expected);
   if (runtime.pending) throw new ComputerError('Desktop helper received overlapping requests.');
+  await beforeSend?.();
+  assertHelperGeneration(runtime.generation, expected);
+  if (!isHelperGenerationActive(runtime.generation)) {
+    throw new ComputerError('The desktop helper changed before the request could be sent.');
+  }
 
   return new Promise<Record<string, any>>((resolve, reject) => {
     let pending: PendingHelperRequest;
@@ -808,13 +830,17 @@ async function sendHelperRequest(request: Record<string, unknown>, expected?: Ex
   });
 }
 
-function runHelper(request: Record<string, unknown>, expected?: ExpectedHelper): Promise<Record<string, any>> {
+function runHelper(
+  request: Record<string, unknown>,
+  expected?: ExpectedHelper,
+  beforeSend?: () => void | Promise<void>
+): Promise<Record<string, any>> {
   const queuedAt = Date.now();
   const operation = typeof request['op'] === 'string' ? request['op'] : 'unknown';
   const result = helperQueue.then(async () => {
     const startedAt = Date.now();
     try {
-      return await sendHelperRequest(request, expected);
+      return await sendHelperRequest(request, expected, beforeSend);
     } finally {
       logInfo(
         `desktop timing op=${operation} helper_queue_ms=${startedAt - queuedAt} helper_ms=${Date.now() - startedAt}`
@@ -1404,7 +1430,14 @@ export interface PointerResult {
 
 export async function act(
   actions: Action[],
-  opts: { frameId?: number; window?: number; ownerWindow?: number; app?: string; ownerApp?: string } = {}
+  opts: {
+    frameId?: number;
+    window?: number;
+    ownerWindow?: number;
+    app?: string;
+    ownerApp?: string;
+    beforeSideEffect?: ComputerSideEffectPreflight;
+  } = {}
 ): Promise<ActionResult> {
   return exclusive(() => actLocked(actions, opts));
 }
@@ -1427,6 +1460,12 @@ export async function actAndCapture(
     ownerWindow?: number;
     app?: string;
     ownerApp?: string;
+    /**
+     * MCP-owned live authority/lifecycle check. Invoked after every local wait and immediately
+     * before each native input batch or Electron clipboard effect; this layer never interprets
+     * the policy result itself.
+     */
+    beforeSideEffect?: ComputerSideEffectPreflight;
     capture?: {
       window?: number;
       full?: boolean;
@@ -1564,7 +1603,14 @@ async function verifyDesktopLocked(spec: VerificationSpec): Promise<Verification
 
 async function actLocked(
   actions: Action[],
-  opts: { frameId?: number; window?: number; ownerWindow?: number; app?: string; ownerApp?: string }
+  opts: {
+    frameId?: number;
+    window?: number;
+    ownerWindow?: number;
+    app?: string;
+    ownerApp?: string;
+    beforeSideEffect?: ComputerSideEffectPreflight;
+  }
 ): Promise<ActionResult> {
   if (process.platform !== 'win32' && actions.some(action => action.type === 'paste' || action.type === 'launch_app' || action.type === 'ui_action')) {
     throw new ComputerError('ACTION_UNSUPPORTED: paste, launch_app and ui_action are currently Windows only.');
@@ -1789,7 +1835,7 @@ async function actLocked(
               }
             }
           : {})
-      }, expected);
+      }, expected, () => opts.beforeSideEffect?.('desktop'));
       helperUsed = true;
       const helperRoutes = Array.isArray(reply['routes']) ? reply['routes'].map(String) : [];
       for (let index = 0; index < sending.length; index++) {
@@ -1832,10 +1878,13 @@ async function actLocked(
           targetWindow: opts.window,
           ...(opts.app === undefined ? {} : { targetApp: opts.app }),
           ...(opts.ownerWindow === undefined ? {} : { ownerWindow: opts.ownerWindow }),
-          ...(opts.ownerApp === undefined ? {} : { ownerApp: opts.ownerApp }) }, expected);
+          ...(opts.ownerApp === undefined ? {} : { ownerApp: opts.ownerApp }) }, expected,
+        () => opts.beforeSideEffect?.('desktop'));
         // Clipboard publication remains owned by Electron. The next native action targets
         // the explicitly selected window; it is one authored paste, not two counted steps.
         const nativeClipboard = await electronClipboard();
+        assertHelperGeneration(helperGeneration, expected);
+        await opts.beforeSideEffect?.('clipboard-write');
         assertHelperGeneration(helperGeneration, expected);
         await nativeClipboard.writeText(action.text);
       } catch (err) {
@@ -1868,6 +1917,8 @@ async function actLocked(
       try {
         const nativeClipboard = await electronClipboard();
         assertHelperGeneration(helperGeneration, expected);
+        await opts.beforeSideEffect?.('clipboard-read');
+        assertHelperGeneration(helperGeneration, expected);
         clipboard.push(await nativeClipboard.readText());
         assertHelperGeneration(helperGeneration, expected);
       } catch (err) {
@@ -1881,6 +1932,8 @@ async function actLocked(
       await flush();
       try {
         const nativeClipboard = await electronClipboard();
+        assertHelperGeneration(helperGeneration, expected);
+        await opts.beforeSideEffect?.('clipboard-write');
         assertHelperGeneration(helperGeneration, expected);
         await nativeClipboard.writeText(action.text);
       } catch (err) {

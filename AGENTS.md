@@ -462,9 +462,12 @@ defers the appendix. Nested calls record refusals but only the outer result deli
 including Core's structured supplemental context. Current blocked, compacting, superseded and
 inactive-worker restrictions veto delivery; the notice never grants permission or repeats work.
 
-`allowUnattributedCalls` permits ordinary tools and code mode without chat attribution,
-including computer use, approved file edits, shell commands and external plugin tools.
-Windows observations use a separate shared unattributed context so follow-up input works.
+`allowUnattributedCalls` permits eligible self-contained tools and code mode without chat
+attribution, including approved file edits, shell commands and external plugin tools. Desktop is
+stricter: application/process launch, input mutations and clipboard read/write require an exact
+request/conversation/local-session Principal even when unattributed work is otherwise allowed.
+Windows observations may use a separate shared unattributed context, but that context cannot
+authorize follow-up input.
 Plan updates, agent operations, finish signals, chat-specific workspace selection and owned
 terminal access still require their actual owner; the setting cannot invent that identity.
 Anonymous terminals retain their existing anonymous custody. Live capabilities, approved roots
@@ -1783,10 +1786,11 @@ postconditions. Registrars own live capability checks. Windows `windows-api.ts` 
 13 Window2 methods: `list_windows`, `get_window`, `list_apps`, `launch_app`, `get_window_state`,
 `click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`,
 `activate_window`. The old `observe`/`computer` wrapper is macOS-only. Windows observation state
-is bounded per exact caller or a separate shared unattributed context when explicitly allowed,
-contains no pixels/text, and input consumes its indexes/geometry. Identified and unattributed
-calls never borrow each other's observations. Opted-out anonymous calls discard that context
-and refuse indexed/coordinate input.
+is bounded per exact caller or a separate shared unattributed context when observation is allowed,
+and contains no pixels/text. Desktop input still requires an exact Principal: it consumes only
+that Principal's indexes/geometry and never the shared unattributed context. Identified and
+unattributed observations never borrow each other's state, and unattributed observation cannot
+authorize follow-up indexed/coordinate input regardless of `allowUnattributedCalls`.
 Explicit activation consumes observation state too; ordinary input already activates its target.
 Late observations and replaced principals cannot lend another call their state.
 Observe → act uses exact frame/ref, target geometry and
@@ -1906,14 +1910,27 @@ Opt-in live plugin and legacy macOS probes are separate evidence, not implied by
 
 When delegation is authorized, reuse a suitable worker. Give each assignment the project,
 concrete task, evidence, allowed files, ownership boundaries, checks and expected handoff.
-Use at most four direct development subagents concurrently and explicitly prohibit nested
+Use at most seven direct development subagents concurrently and explicitly prohibit nested
 delegation. Audit-only means no source/test/config/AppData writes beyond the named report.
 The prime independently verifies important claims; parallel reports are hypotheses, not votes.
 
 For the current hardening program, use `docs/octo-chat-full-audit-2026-09-14.md` as the finding
-basis and `docs/remediation-program-2026-09-14.md` as the dependency/ownership/PR plan. Earlier
+basis and `docs/remediation-program-2026-09-14.md` as the dependency/state/audit plan. Earlier
 engineering audits and worklogs are archived under `docs/old docs-report/`; they are historical
 evidence, not current implementation authority.
+
+The hardening program currently has **one human maintainer**. Run implementation PRs strictly
+linearly: one active coding PR, no stacked implementation child and no second fallback coding
+branch while CI/review is pending. AI workers may investigate bounded slices concurrently, but
+they are evidence sources, not human approvers. For security/durability-sensitive PRs, the
+maintainer must review the exact final pushed SHA, leave a GitHub self-review comment recording
+the applicable ownership/generation/side-effect/crash/revocation checks and validation evidence,
+resolve or explicitly disposition substantive CodeRabbit findings, and merge only after required
+hosted checks are green. Do not wait for, invent or claim a nonexistent counterpart maintainer.
+Use the audit's existing IDs as the remediation identity; GitHub `#<number>` is only the
+hosting-system identifier and never the roadmap/dependency identity. New remediation PR titles use
+`[STATE][AUDIT-ID][AUDIT-ID...] Short imperative title`, with lifecycle states defined in the
+remediation program. New branches use `<type>/<audit-id[-audit-id...]>-<short-slug>`.
 
 When integrating external PRs, preserve original authorship. Adapted or snapshot-integrated
 work must name the original PR/author and carry appropriate GitHub-linked `Co-authored-by`

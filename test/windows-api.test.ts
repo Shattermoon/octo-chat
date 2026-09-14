@@ -123,6 +123,28 @@ describe('Windows Window2 interface', () => {
     await expect(click).rejects.toThrow('observation changed');
     expect(backend.act).not.toHaveBeenCalled();
   });
+  it('carries a per-call authority preflight through the final native act boundary', async () => {
+    const { api, backend, result } = fixture();
+    await api.get_window_state({ window });
+    let releaseCurrent!: (value: typeof result) => void;
+    vi.mocked(backend.getWindowState).mockImplementationOnce(() => new Promise(resolve => { releaseCurrent = resolve; }));
+    let allowed = true;
+    const beforeSideEffect = vi.fn(async () => {
+      if (!allowed) throw new Error('TOOL_DISABLED: control revoked before native input');
+    });
+    vi.mocked(backend.act).mockImplementationOnce(async (_actions, options) => {
+      await options?.beforeSideEffect?.('desktop');
+      return { cursor: null, clipboard: [], completedCount: 1, routes: ['sendinput'] };
+    });
+    const pending = api.press_key({ window, key: 'A' }, { beforeSideEffect });
+    await vi.waitFor(() => expect(backend.getWindowState).toHaveBeenCalledTimes(2));
+    allowed = false;
+    releaseCurrent(result);
+
+    await expect(pending).rejects.toThrow('control revoked');
+    expect(backend.act).toHaveBeenCalledOnce();
+    expect(beforeSideEffect).toHaveBeenCalledExactlyOnceWith('desktop');
+  });
   it('evicts old observation authority at the bounded thirty-two-window limit', async () => {
     const { api, backend, result } = fixture();
     vi.mocked(backend.getWindowState).mockImplementation(async opts => ({ ...result, window: { ...nativeWindow, id: opts.window! } }));

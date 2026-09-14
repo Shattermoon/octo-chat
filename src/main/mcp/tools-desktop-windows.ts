@@ -1,16 +1,22 @@
 /** Codex Window2 vocabulary backed by this app's existing native Desktop owner. */
 import { z } from 'zod';
-import { act, getWindowState, ComputerError } from '../computer/index.js';
-import { createWindowsComputerApi, WINDOWS_API_METHODS, WINDOWS_API_SCHEMAS, type WindowsComputerApi } from '../computer/windows-api.js';
+import { act, getWindowState, ComputerError, type ComputerSideEffect } from '../computer/index.js';
+import {
+  createWindowsComputerApi,
+  WINDOWS_API_METHODS,
+  WINDOWS_API_SCHEMAS,
+  type WindowsComputerApi,
+  type WindowsComputerCallOptions
+} from '../computer/windows-api.js';
 import { browserTabChord, isBrowserProcess } from '../computer/browser-chords.js';
 import { currentCall, noteCount } from './call-context.js';
 import { getConfig } from '../config.js';
-import { fail, type SurfaceRegistrar, type ToolContent, type ToolResult } from './kernel.js';
-import { WINDOWS_COMPUTER_READ_METHODS, WINDOWS_COMPUTER_STATE_INPUT_METHODS } from '../../shared/windows-computer.js';
+import { IdentityLostError } from '../agents.js';
+import { assertCurrentCallLifecycle, fail, type SurfaceRegistrar, type ToolContent, type ToolResult } from './kernel.js';
+import { WINDOWS_COMPUTER_READ_METHODS } from '../../shared/windows-computer.js';
 import { toolDeclaration } from './tool-declarations.js';
 
 const READ_METHODS = new Set<string>(WINDOWS_COMPUTER_READ_METHODS);
-const STATE_INPUT_METHODS = new Set<string>(WINDOWS_COMPUTER_STATE_INPUT_METHODS);
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024 - 64 * 1024;
 // Only disposable observation indexes/geometry live here; the native frame/ref owner still
 // validates generation, identity and current geometry. Explicitly allowed unattributed
@@ -21,13 +27,19 @@ const MAX_CONTEXTS = 32;
 
 function apiForCaller(method: string): WindowsComputerApi {
   const caller = currentCall()?.caller;
-  const principal = caller?.sessionId ? `session:${caller.sessionId}`
+  // Observation authority is owned by the exact live chat attachment, not merely the durable
+  // local session. Compact & Resume deliberately keeps the same session while rebinding it from
+  // conversation A to B; B must not inherit A's frame ids, element indexes or window geometry.
+  const exactPrincipal = caller?.sessionId && caller?.conversationId
+    ? `session:${caller.sessionId}:chat:${caller.conversationId}`
     : caller?.conversationId ? `chat:${caller.conversationId}`
-    : getConfig().multiAgent.allowUnattributedCalls ? 'unattributed' : null;
+      : null;
+  const principal = exactPrincipal
+    ?? (READ_METHODS.has(method) && getConfig().multiAgent.allowUnattributedCalls ? 'unattributed' : null);
   if (!principal) {
     contexts.delete('unattributed');
-    if (STATE_INPUT_METHODS.has(method)) {
-      throw new ComputerError('CALLER_IDENTITY_REQUIRED: indexed and coordinate input requires exact companion identity or Allow unattributed calls enabled in app settings; no input ran.');
+    if (!READ_METHODS.has(method)) {
+      throw new ComputerError('CALLER_IDENTITY_REQUIRED: Desktop input and application launch require exact companion request/chat/session identity; no input ran.');
     }
     // Unattributed reads/simple exact-window operations remain useful, but never publish
     // an implicit latest-observation authority that another anonymous call could consume.
@@ -91,6 +103,41 @@ async function refuseBrowserChord(key: string, window: { id: number }): Promise<
 }
 
 export function registerWindowsDesktopTools(reg: SurfaceRegistrar): void {
+  const requireLiveAuthority = (operation: string) => async (effect: ComputerSideEffect): Promise<void> => {
+    await assertCurrentCallLifecycle();
+    const requirement = effect === 'desktop'
+      ? { kind: 'capability' as const, capability: 'control' as const }
+      : effect === 'clipboard-read'
+        ? { kind: 'capability' as const, capability: 'clipboardRead' as const }
+        : { kind: 'capability' as const, capability: 'clipboardWrite' as const };
+    const operationId = effect === 'desktop' || operation === 'read_clipboard' || operation === 'write_clipboard'
+      ? operation
+      : `${operation}:${effect}`;
+    const decision = reg.authorize(operationId, requirement);
+    if (decision.effect === 'allow') return;
+    if (decision.reasonCode === 'caller_identity_required') {
+      throw new IdentityLostError(
+        effect === 'desktop'
+          ? 'CALLER_IDENTITY_REQUIRED: Desktop input requires exact companion request/chat/session identity. Retry after the companion reconnects; no input ran.'
+          : effect === 'clipboard-read'
+            ? 'CALLER_IDENTITY_REQUIRED: reading the clipboard requires exact companion request/chat/session identity. Retry after the companion reconnects; no clipboard data was read.'
+            : 'CALLER_IDENTITY_REQUIRED: replacing the clipboard requires exact companion request/chat/session identity. Retry after the companion reconnects; no clipboard data was changed.'
+      );
+    }
+    if (decision.reasonCode === 'read_only') {
+      throw new ComputerError(
+        `TOOL_DISABLED: ${operation.split(':', 1)[0] ?? operation} is disabled because Read-only mode is on. ` +
+        'Ask the user to turn Read-only off in the app, then retry.'
+      );
+    }
+    throw new ComputerError(
+      effect === 'desktop'
+        ? 'TOOL_DISABLED: mouse and keyboard control is disabled by the current Octo Chat permissions. Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
+        : effect === 'clipboard-read'
+          ? 'TOOL_DISABLED: read_clipboard needs the Read the clipboard permission.'
+          : 'TOOL_DISABLED: write_clipboard needs the Replace clipboard text permission.'
+    );
+  };
   for (const method of WINDOWS_API_METHODS) {
     const read = READ_METHODS.has(method);
     const capability = read ? 'screen' : 'control';
@@ -113,8 +160,10 @@ export function registerWindowsDesktopTools(reg: SurfaceRegistrar): void {
         if (refusal) return fail(refusal);
       }
       const api = apiForCaller(method);
-      const invoke = api[method] as (args: unknown) => Promise<unknown>;
-      const value = await invoke(input);
+      const invoke = api[method] as (args: unknown, options?: WindowsComputerCallOptions) => Promise<unknown>;
+      const value = read
+        ? await invoke(input)
+        : await invoke(input, { beforeSideEffect: requireLiveAuthority(method) });
       if (Array.isArray(value)) noteCount(value.length);
       return desktopResult(method, value);
     }));
@@ -124,7 +173,10 @@ export function registerWindowsDesktopTools(reg: SurfaceRegistrar): void {
     description: 'Read this computer’s clipboard text.', inputSchema: z.object({}).strict(),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }
   })), () => reg.guarded('clipboardRead', 'read_clipboard', async () => {
-    const value = (await act([{ type: 'read_clipboard' }])).clipboard[0] ?? '';
+    const value = (await act(
+      [{ type: 'read_clipboard' }],
+      { beforeSideEffect: requireLiveAuthority('read_clipboard') }
+    )).clipboard[0] ?? '';
     if (value.length > 64_000) throw new ComputerError('CLIPBOARD_TOO_LARGE: clipboard text exceeds the response limit.');
     return desktopResult('read_clipboard', value);
   }));
@@ -132,7 +184,10 @@ export function registerWindowsDesktopTools(reg: SurfaceRegistrar): void {
     description: 'Replace this computer’s clipboard text.', inputSchema: z.object({ text: z.string().max(100_000) }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true }
   })), input => reg.guarded('clipboardWrite', 'write_clipboard', async () => {
-    await act([{ type: 'write_clipboard', text: input.text }]);
+    await act(
+      [{ type: 'write_clipboard', text: input.text }],
+      { beforeSideEffect: requireLiveAuthority('write_clipboard') }
+    );
     return { content: [{ type: 'text', text: 'Clipboard text replaced.' }], structuredContent: { value: null } };
   }));
 }

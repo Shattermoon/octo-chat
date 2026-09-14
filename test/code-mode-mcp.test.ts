@@ -197,8 +197,8 @@ it('initializes, discovers and executes the actual model-facing MCP contract wit
   expect(JSON.stringify(events.filter(event => event.call.tool === 'exec'))).not.toContain('PRIVATE_ALPHA');
 });
 
-it.runIf(process.platform === 'win32').each([true, false])('routes sky through Desktop MCP with attributed=%s, retaining observation and live permissions', async attributed => {
-  const who = attributed ? await identity() : { requestId: undefined, session: { id: null } };
+it.runIf(process.platform === 'win32')('routes attributed sky through Desktop MCP, retaining observation, exact Principal and live permissions', async () => {
+  const who = await identity();
   const window = { id: 77, app: 'fixture.exe', title: 'Owned fixture', process: 'fixture', x: 0, y: 0, width: 2, height: 2, dpi: 96 };
   const data = (await sharp({ create: { width: 2, height: 2, channels: 3, background: 'green' } }).png().toBuffer()).toString('base64');
   const callers: Array<string | null | undefined> = [];
@@ -220,7 +220,10 @@ it.runIf(process.platform === 'win32').each([true, false])('routes sky through D
   const publicWindow = { app: window.app, id: window.id, title: window.title };
   const clicked = await rpc('tools/call', { name: 'exec', arguments: { code: `await sky.click({window:${JSON.stringify(publicWindow)},element_index:0}); text("accepted");` } }, who.requestId, 'desktop');
   expect(text(clicked)).toBe('accepted');
-  expect(action).toHaveBeenCalledExactlyOnceWith([{ type: 'click_ref', ref: 'fixture-ref', button: 'left', count: 1 }], { window: 77, app: 'fixture.exe' });
+  expect(action).toHaveBeenCalledExactlyOnceWith(
+    [{ type: 'click_ref', ref: 'fixture-ref', button: 'left', count: 1 }],
+    { window: 77, app: 'fixture.exe', beforeSideEffect: expect.any(Function) }
+  );
   expect(callers).toEqual([who.session.id, who.session.id]);
   ctx.caps = { ...ctx.caps, control: false };
   const revoked = await rpc('tools/call', { name: 'exec', arguments: { code: `await sky.activate_window({window:${JSON.stringify(publicWindow)}}); text("should not run");` } }, who.requestId, 'desktop');
@@ -228,9 +231,34 @@ it.runIf(process.platform === 'win32').each([true, false])('routes sky through D
   expect(text(revoked)).toContain('TOOL_DISABLED');
   expect(text(revoked)).not.toContain('should not run');
   expect(action).toHaveBeenCalledTimes(1);
-  if (who.session.id) {
-    const names = (await readEvents(who.session.id)).filter(event => event.kind === 'tool_call').map(event => event.call.tool);
-    expect(names).toEqual(expect.arrayContaining(['list_windows', 'get_window_state', 'click', 'activate_window', 'exec']));
+  const names = (await readEvents(who.session.id)).filter(event => event.kind === 'tool_call').map(event => event.call.tool);
+  expect(names).toEqual(expect.arrayContaining(['list_windows', 'get_window_state', 'click', 'activate_window', 'exec']));
+});
+
+it.runIf(process.platform === 'win32')('lets unattributed code mode observe but never use a nested Desktop mutation', async () => {
+  const config = getConfig();
+  await saveConfig({ ...config, multiAgent: { ...config.multiAgent, allowUnattributedCalls: true } });
+  const window = { id: 79, app: 'fixture.exe', title: 'Anonymous observation fixture', process: 'fixture', x: 0, y: 0, width: 2, height: 2, dpi: 96 };
+  const action = vi.spyOn(desktopBackend, 'act').mockResolvedValue({ completedCount: 1, routes: ['local'], cursor: null, clipboard: [] } as never);
+  vi.spyOn(desktopBackend, 'listWindows').mockResolvedValue({ windows: [window], screen: { x: 0, y: 0, width: 2, height: 2 } } as never);
+  try {
+    const observed = await rpc('tools/call', {
+      name: 'exec',
+      arguments: { code: 'const windows = await sky.list_windows(); text(windows.map(w => w.id));' }
+    }, undefined, 'desktop');
+    expect(observed.result.isError, text(observed)).not.toBe(true);
+    expect(text(observed)).toContain('79');
+
+    const denied = await rpc('tools/call', {
+      name: 'exec',
+      arguments: { code: 'await sky.launch_app({app:"fixture.exe"}); text("SHOULD_NOT_RUN");' }
+    }, undefined, 'desktop');
+    expect(denied.result.isError).toBe(true);
+    expect(text(denied)).toContain('CALLER_IDENTITY_REQUIRED');
+    expect(text(denied)).not.toContain('SHOULD_NOT_RUN');
+    expect(action).not.toHaveBeenCalled();
+  } finally {
+    await saveConfig(config);
   }
 });
 

@@ -1,6 +1,6 @@
 import { offerToolInput, acknowledgeToolInput, TOOL_INPUT_HEADER } from '../session/input.js';
 import { pluginManager } from '../plugins/manager.js';
-import { WINDOWS_COMPUTER_STATE_INPUT_METHODS } from '../../shared/windows-computer.js';
+import { WINDOWS_COMPUTER_INPUT_METHODS, WINDOWS_COMPUTER_STATE_INPUT_METHODS } from '../../shared/windows-computer.js';
 /**
  * The machinery every model-facing tool sits on, independent of which surface it lives on.
  *
@@ -347,6 +347,71 @@ function setCallerConversation(context: CallContext, conversationId: string | nu
   context.caller.sessionId = exact?.conversationId === conversationId ? exact.sessionId : null;
 }
 
+/**
+ * Revalidates the current proven caller after a handler-owned await and before an irreversible
+ * Desktop/clipboard effect.
+ *
+ * The Principal itself is still the exact proof captured for this request. This check answers a
+ * different question: whether that proven conversation is still allowed to act *now*. Compact &
+ * Resume, the user's block button, and worker retirement/sleep can all revoke a caller while a
+ * composite Desktop tool is awaiting browser/native inspection. Unknown session attachment is not
+ * an in-flight sensitive call can no longer use an `unknown` attachment because its captured
+ * request/chat/session Principal is no longer provably current. That is not a permanent Block:
+ * a later request may establish a fresh exact attachment. A proved superseded attachment is
+ * refused under its dedicated lineage error below.
+ */
+export async function assertCurrentCallLifecycle(): Promise<void> {
+  const caller = currentCall()?.caller;
+  const conversationId = caller?.conversationId ?? null;
+  if (!conversationId) return; // Exact-Principal policy owns unidentified callers.
+
+  const synchronousRefusal = (): string | null => {
+    if (isChatBlocked(conversationId)) return midCallLifecycleRefusal(BLOCKED_CHAT_REFUSAL);
+    if (compactingConversation(conversationId) !== null) {
+      return midCallLifecycleRefusal(COMPACTION_IN_PROGRESS_REFUSAL);
+    }
+    const dormant = dormantWorkerNotice(conversationId);
+    if (dormant) return midCallLifecycleRefusal(dormant);
+    const retired = retiredWorkerForConversation(conversationId);
+    if (retired) {
+      return `WORKER_RETIRED: ${retired.id} was retired because ${retired.reason}. This chat can no longer use local tools. Stop working and return to the prime chat.`;
+    }
+    const ended = endedWorkerNotice(conversationId);
+    return ended ? midCallLifecycleRefusal(ended) : null;
+  };
+
+  const before = synchronousRefusal();
+  if (before) throw new ComputerError(before);
+  const attachment = await conversationAttachment(conversationId, caller?.sessionId ?? null);
+  // conversationAttachment() is itself an await: a block/compaction/worker transition that lands
+  // while it is reading must still win before the native side effect begins.
+  const after = synchronousRefusal();
+  if (after) throw new ComputerError(after);
+  if (attachment === 'superseded') {
+    throw new ComputerError(midCallLifecycleRefusal(CONVERSATION_SUPERSEDED_REFUSAL));
+  }
+  if (attachment !== 'current') {
+    // Session-history deletion is not a permanent Block: a later request may establish a fresh
+    // exact attachment. But this in-flight sensitive call can no longer prove that the
+    // request/chat/session Principal captured at admission is still current at its effect boundary.
+    throw new IdentityLostError(
+      'CALLER_IDENTITY_REQUIRED: this Desktop call no longer has its exact current session/chat attachment. ' +
+      'Retry after the companion establishes a current attachment; no further Desktop or clipboard side effect ran.'
+    );
+  }
+}
+
+function desktopNeedsExactPrincipal(name: string, args: unknown): boolean {
+  if ((WINDOWS_COMPUTER_INPUT_METHODS as readonly string[]).includes(name)) return true;
+  if (name === 'read_clipboard' || name === 'write_clipboard') return true;
+  if (name !== 'computer' || !args || typeof args !== 'object') return false;
+  const actions = (args as { actions?: unknown }).actions;
+  if (!Array.isArray(actions)) return false;
+  return actions.some(action =>
+    !!action && typeof action === 'object' && (action as { type?: unknown }).type !== 'wait'
+  );
+}
+
 /** The only SDK handler context field this layer consumes; request identity comes from ingress ALS. */
 type McpCallContext = Pick<ServerContext, 'sessionId'>;
 
@@ -556,6 +621,17 @@ export const COMPACTION_IN_PROGRESS_REFUSAL =
   'user message asks for the handoff brief: write that brief now, as plain text, and then stop. ' +
   'Work continues in the replacement chat.';
 
+export const CONVERSATION_SUPERSEDED_REFUSAL =
+  'CONVERSATION_SUPERSEDED: Compact & Resume replaced this ChatGPT conversation. Its transcript remains readable, but it can no longer execute local tools. Continue only in the replacement chat; no local tool was run.';
+
+function midCallLifecycleRefusal(message: string): string {
+  const noFurther = 'No further Desktop or clipboard side effect ran after this authority change. ';
+  return message
+    .replace(/, and no (?:local )?tool was run\. /i, `. ${noFurther}`)
+    .replace(/; no local tool was run\./i, `. ${noFurther.trim()}`)
+    .replace(/Nothing was run\. /i, noFurther);
+}
+
 async function dispatchTracked(
   context: CallContext,
   name: string,
@@ -593,7 +669,8 @@ async function dispatchTracked(
   // handler runs. Recording a late identity cannot recover a discarded anonymous frame.
   const desktopContext = surface === 'desktop' && (name === 'get_window_state' ||
     (WINDOWS_COMPUTER_STATE_INPUT_METHODS as readonly string[]).includes(name));
-  if (!context.caller.conversationId && (desktopContext || name === 'exec' || name === 'update_plan' || (identitySensitive && swarmRunning())) && requestId) {
+  const desktopPrincipal = surface === 'desktop' && desktopNeedsExactPrincipal(name, args);
+  if (!context.caller.conversationId && (desktopContext || desktopPrincipal || name === 'exec' || name === 'update_plan' || (identitySensitive && swarmRunning())) && requestId) {
     setCallerConversation(
       context,
       await awaitFreshCallOrigin(name, startedAt, IDENTITY_EVIDENCE_MS, { requestId })
@@ -736,11 +813,6 @@ async function dispatchTracked(
   // chat over to `superseded`, chat A gets no tool at all, and each refusal tells the model
   // the only thing it can usefully do is write the brief.
   const compacting = !blockedChat && compactingConversation(context.caller.conversationId) !== null;
-  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
-  const retiredLeaseAmbiguous =
-    !allowUnattributed && hasRetiredWorkerLeases() && !context.caller.conversationId;
-  const dormantLeaseAmbiguous =
-    !allowUnattributed && hasDormantWorkerLeases() && !context.caller.conversationId;
   // In a swarm, a relative/defaulted filesystem operation is not safe to execute after the
   // exact caller lookup timed out: its workspace is part of the requested operation. Falling
   // back to the first approved root turns an attribution outage into wrong-project mutation.
@@ -754,6 +826,14 @@ async function dispatchTracked(
       ? (args as { session_id?: number }).session_id : undefined;
     await acknowledgeBackgroundExecOutput(context.caller.sessionId, startedAt, explicitPoll);
   }
+  // This setting is a live user decision, not request-start configuration. Keep its read at the
+  // last synchronous decision point after every attribution/input acknowledgement await, so a
+  // user changing it while this request is paused takes effect on this request's ambiguity gate.
+  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
+  const retiredLeaseAmbiguous =
+    !allowUnattributed && hasRetiredWorkerLeases() && !context.caller.conversationId;
+  const dormantLeaseAmbiguous =
+    !allowUnattributed && hasDormantWorkerLeases() && !context.caller.conversationId;
   let handlerRan = false;
   markTiming('identity');
   const invokeHandler = (): Promise<ToolResult> => {
@@ -766,11 +846,7 @@ async function dispatchTracked(
         : compacting
         ? Promise.resolve(fail(COMPACTION_IN_PROGRESS_REFUSAL))
         : supersededConversation
-        ? Promise.resolve(
-            fail(
-              'CONVERSATION_SUPERSEDED: Compact & Resume replaced this ChatGPT conversation. Its transcript remains readable, but it can no longer execute local tools. Continue only in the replacement chat; no local tool was run.'
-            )
-          )
+        ? Promise.resolve(fail(CONVERSATION_SUPERSEDED_REFUSAL))
         : dormantWorker
         ? Promise.resolve(fail(dormantWorker))
         : retiredWorker
@@ -1175,7 +1251,10 @@ export function authorizeToolAction(
     workspaceLease: null,
     operationId
   };
-  const decision = evaluateActionPolicy(action, { capabilities: ctx.caps, readOnly: ctx.readOnly }, requirement);
+  const decision = evaluateActionPolicy(action, {
+    capabilities: ctx.caps,
+    readOnly: ctx.readOnly
+  }, requirement);
   try {
     ctx.onActionPolicyDecision?.({
       ...decision,
@@ -1191,7 +1270,13 @@ export function authorizeToolAction(
   return decision;
 }
 
-export function createRegistrar(server: McpServer | null, ctx: ToolContext, surface: SurfaceId, observe?: (name: string, config: { description: string; inputSchema: z.ZodType; annotations?: ToolAnnotations }) => void): SurfaceRegistrar {
+export function createRegistrar(
+  server: McpServer | null,
+  ctx: ToolContext,
+  surface: SurfaceId,
+  observe?: (name: string, config: { description: string; inputSchema: z.ZodType; annotations?: ToolAnnotations }) => void,
+  liveContext: () => ToolContext = () => ctx
+): SurfaceRegistrar {
   const caps = ctx.caps;
   const exposedCaps = ctx.exposedCaps ?? caps;
   // These two do not follow a capability checkbox: they are whole features the user
@@ -1218,12 +1303,17 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     registered: () => [...names],
     descriptions: () => [...handlers].map(([name, entry]) => ({ name, description: entry.description })),
     authorize(name, requirement) {
-      return authorizeToolAction(ctx, surface, name, requirement);
+      return authorizeToolAction(liveContext(), surface, name, requirement);
     },
     enforcePolicy(name, requirement, fn) {
       const decision = this.authorize(name, requirement);
       if (decision.effect === 'deny') {
         const displayName = name.split(':', 1)[0] ?? name;
+        if (decision.reasonCode === 'caller_identity_required') {
+          return Promise.resolve(failIdentity(
+            `CALLER_IDENTITY_REQUIRED: ${displayName} requires exact companion request/chat/session identity. Retry after the companion reconnects; no Desktop action ran.`
+          ));
+        }
         return Promise.resolve(fail(
           decision.reasonCode === 'read_only'
             ? `TOOL_DISABLED: ${displayName} is disabled because Read-only mode is on. Ask the user to turn Read-only off in the app, then retry.`
@@ -1265,8 +1355,13 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     },
     guarded(cap, name, fn) {
       return guard(name, async () => {
-        const decision = authorizeToolAction(ctx, surface, name, { kind: 'capability', capability: cap });
+        const decision = this.authorize(name, { kind: 'capability', capability: cap });
         if (decision.effect === 'deny') {
+          if (decision.reasonCode === 'caller_identity_required') {
+            return failIdentity(
+              `CALLER_IDENTITY_REQUIRED: ${name} requires exact companion request/chat/session identity. Retry after the companion reconnects; no Desktop action ran.`
+            );
+          }
           // The effective capability can be off because Read-only overrides its checkbox.
           // Name that owner, otherwise use the same permission label as Settings.
           return fail(

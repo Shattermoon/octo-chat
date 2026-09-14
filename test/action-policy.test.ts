@@ -9,6 +9,7 @@ import {
 import { DEFAULT_CAPABILITIES } from '../src/shared/types.js';
 import { createRegistrar, type ToolResult } from '../src/main/mcp/kernel.js';
 import { registerCoreTools } from '../src/main/mcp/tools-core.js';
+import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
 
 const principal: Principal = {
   conversationId: 'conversation-1',
@@ -21,11 +22,12 @@ const principal: Principal = {
 function context(
   sourceSurface: ActionContext['sourceSurface'],
   operationId: string,
-  requirement: ActionRequirement
+  requirement: ActionRequirement,
+  owner: Principal = principal
 ): ActionContext {
   const intent = actionIntentFor(sourceSurface, operationId, requirement);
   return {
-    principal,
+    principal: owner,
     sourceSurface,
     actionClass: intent.actionClass,
     target: { kind: intent.target },
@@ -115,6 +117,43 @@ describe('central action policy', () => {
     expect(evaluateActionPolicy(context('desktop', 'get_window_state', observe), {
       capabilities: { ...DEFAULT_CAPABILITIES, screen: false }, readOnly: true
     }, observe).reasonCode).toBe('capability_disabled');
+  });
+
+  it('requires an exact Principal for sensitive Desktop actions while leaving ordinary observation unchanged', () => {
+    const unknown: Principal = {
+      conversationId: null,
+      localSessionId: null,
+      requestId: 'request-without-page-proof',
+      runId: null,
+      agentId: null
+    };
+    const cases = [
+      ['launch_app', 'control'],
+      ['press_key', 'control'],
+      ['write_clipboard', 'clipboardWrite'],
+      ['read_clipboard', 'clipboardRead']
+    ] as const;
+
+    for (const [operationId, capability] of cases) {
+      const requirement = { kind: 'capability', capability } as const;
+      const action = context('desktop', operationId, requirement, unknown);
+      const denied = evaluateActionPolicy(action, {
+        capabilities: { ...DEFAULT_CAPABILITIES, [capability]: true },
+        readOnly: false
+      }, requirement);
+      expect(denied).toMatchObject({ effect: 'deny', reasonCode: 'caller_identity_required' });
+
+      expect(evaluateActionPolicy(context('desktop', operationId, requirement), {
+        capabilities: { ...DEFAULT_CAPABILITIES, [capability]: true },
+        readOnly: false
+      }, requirement)).toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
+    }
+
+    const observe = { kind: 'capability', capability: 'screen' } as const;
+    expect(evaluateActionPolicy(context('desktop', 'get_window_state', observe, unknown), {
+      capabilities: { ...DEFAULT_CAPABILITIES, screen: true },
+      readOnly: false
+    }, observe)).toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
   });
 
   it('is the live gate used by the registered Core exec_command adapter', async () => {
@@ -219,5 +258,40 @@ describe('central action policy', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).toContain('denied by the current Octo Chat policy');
     expect(featureDisabled).not.toHaveBeenCalled();
+  });
+
+  it('re-evaluates registrar authorization from live context after a handler await', async () => {
+    const initial = {
+      roots: [],
+      readOnly: false,
+      caps: { ...DEFAULT_CAPABILITIES, control: true },
+      exposedCaps: { ...DEFAULT_CAPABILITIES, control: true }
+    };
+    let live = { ...initial, caps: { ...initial.caps }, exposedCaps: { ...initial.exposedCaps } };
+    const registrar = createRegistrar(null, initial, 'desktop', undefined, () => live);
+    const call: CallContext = {
+      startedAt: Date.now(),
+      transportKey: null,
+      agent: null,
+      caller: {
+        transportKey: null,
+        requestId: 'request-live-policy',
+        conversationId: 'conversation-live-policy',
+        sessionId: 'session-live-policy'
+      },
+      outcome: null,
+      evidence: emptyEvidence()
+    };
+
+    await runInCallContext(call, async () => {
+      expect(registrar.authorize('computer:desktop', { kind: 'capability', capability: 'control' }))
+        .toMatchObject({ effect: 'allow', reasonCode: 'allowed' });
+      live = { ...live, readOnly: true };
+      expect(registrar.authorize('computer:desktop', { kind: 'capability', capability: 'control' }))
+        .toMatchObject({ effect: 'deny', reasonCode: 'read_only' });
+      live = { ...live, readOnly: false, caps: { ...live.caps, control: false } };
+      expect(registrar.authorize('computer:desktop', { kind: 'capability', capability: 'control' }))
+        .toMatchObject({ effect: 'deny', reasonCode: 'capability_disabled' });
+    });
   });
 });

@@ -1,5 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Capabilities } from '../src/shared/types.js';
+import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
+
+const lifecycle = vi.hoisted(() => ({ blocked: false, attachment: 'current' as 'current' | 'superseded' | 'unknown' }));
+
+vi.mock('../src/main/session/store.js', async (original) => ({
+  ...await original<typeof import('../src/main/session/store.js')>(),
+  conversationAttachment: async () => lifecycle.attachment
+}));
+vi.mock('../src/main/session/blocked-chats.js', async (original) => ({
+  ...await original<typeof import('../src/main/session/blocked-chats.js')>(),
+  isChatBlocked: () => lifecycle.blocked
+}));
 
 const desktop = vi.hoisted(() => {
   class TestComputerError extends Error {}
@@ -32,6 +44,25 @@ import { registerMacOSDesktopTools as registerDesktopTools } from '../src/main/m
 import { authorizeToolAction, type ToolContext } from '../src/main/mcp/kernel.js';
 import type { ActionRequirement } from '../src/main/action-policy.js';
 
+let principalSequence = 0;
+function exactDesktopCall<T>(fn: () => Promise<T>): Promise<T> {
+  const id = ++principalSequence;
+  const call: CallContext = {
+    startedAt: Date.now(),
+    transportKey: null,
+    agent: null,
+    caller: {
+      transportKey: null,
+      requestId: `desktop-runtime-${id}`,
+      conversationId: `desktop-runtime-conversation-${id}`,
+      sessionId: `desktop-runtime-session-${id}`
+    },
+    outcome: null,
+    evidence: emptyEvidence()
+  };
+  return runInCallContext(call, fn);
+}
+
 function caps(over: Partial<Capabilities>): Capabilities {
   return {
     browse: false,
@@ -52,10 +83,11 @@ function caps(over: Partial<Capabilities>): Capabilities {
   };
 }
 
-function desktopSurface(over: Partial<Capabilities> = {}) {
+function desktopSurface(over: Partial<Capabilities> = {}, inspect?: (ctx: ToolContext) => void) {
   const registered = new Map<string, { config: any; handler: (input: any) => Promise<any> }>();
   const liveCaps = caps({ screen: true, ...over });
   const policyCtx: ToolContext = { roots: [], caps: liveCaps, readOnly: false, privacyScreenshots: false };
+  inspect?.(policyCtx);
   registerDesktopTools({
     ctx: policyCtx,
     caps: liveCaps,
@@ -87,12 +119,17 @@ describe('Desktop computer browser chords', () => {
   const notepad = { ...chrome, id: 42, title: 'notes.txt - Notepad', process: 'notepad' };
   const acted = { completedCount: 1, routes: ['helper'], cursor: null, clipboard: [], screenshot: null, verification: null };
 
+  beforeEach(() => {
+    lifecycle.blocked = false;
+    lifecycle.attachment = 'current';
+  });
+
   it('refuses a tab or window chord aimed at the browser in front', async () => {
     desktop.actAndCapture.mockClear();
     desktop.activeWindow.mockResolvedValueOnce({ window: chrome, screen });
     const computer = desktopSurface({ control: true }).get('computer')!;
 
-    const result = await computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] });
+    const result = await exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] }));
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('BROWSER_TAB_CHORD: ctrl+w');
     expect(result.content[0].text).toContain('Build GTA Web Game - Google Chrome');
@@ -104,9 +141,9 @@ describe('Desktop computer browser chords', () => {
     desktop.listWindows.mockResolvedValueOnce({ windows: [notepad, chrome], screen });
     const computer = desktopSurface({ control: true }).get('computer')!;
 
-    const result = await computer.handler({
+    const result = await exactDesktopCall(() => computer.handler({
       actions: [{ type: 'focus', window: 41 }, { type: 'keypress', keys: ['ctrl', 'shift', 'tab'] }]
-    });
+    }));
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('BROWSER_TAB_CHORD: ctrl+shift+tab');
     expect(desktop.actAndCapture).not.toHaveBeenCalled();
@@ -118,9 +155,80 @@ describe('Desktop computer browser chords', () => {
     desktop.actAndCapture.mockResolvedValueOnce(acted);
     const computer = desktopSurface({ control: true }).get('computer')!;
 
-    const result = await computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] });
+    const result = await exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] }));
     expect(result.isError).toBeFalsy();
     expect(desktop.actAndCapture).toHaveBeenCalledTimes(1);
+    expect(desktop.actAndCapture).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ beforeSideEffect: expect.any(Function) })
+    );
+  });
+
+  it.each(['capability', 'read-only'] as const)(
+    'revalidates %s after browser-chord inspection before native input',
+    async (revocation) => {
+      let releaseWindow!: (value: { window: typeof notepad; screen: typeof screen }) => void;
+      desktop.actAndCapture.mockClear();
+      desktop.activeWindow.mockImplementationOnce(() => new Promise((resolve) => { releaseWindow = resolve; }));
+      desktop.actAndCapture.mockResolvedValueOnce(acted);
+      let policyCtx!: ToolContext;
+      const computer = desktopSurface({ control: true }, (ctx) => { policyCtx = ctx; }).get('computer')!;
+
+      const pending = exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] }));
+      await vi.waitFor(() => expect(desktop.activeWindow).toHaveBeenCalledTimes(1));
+      if (revocation === 'capability') policyCtx.caps.control = false;
+      else policyCtx.readOnly = true;
+      releaseWindow({ window: notepad, screen });
+
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('TOOL_DISABLED');
+      expect(desktop.actAndCapture).not.toHaveBeenCalled();
+    }
+  );
+
+  it('revalidates caller lifecycle after browser-chord inspection before native input', async () => {
+    let releaseWindow!: (value: { window: typeof notepad; screen: typeof screen }) => void;
+    desktop.actAndCapture.mockClear();
+    desktop.activeWindow.mockImplementationOnce(() => new Promise((resolve) => { releaseWindow = resolve; }));
+    desktop.actAndCapture.mockResolvedValueOnce(acted);
+    const computer = desktopSurface({ control: true }).get('computer')!;
+
+    const pending = exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }] }));
+    await vi.waitFor(() => expect(desktop.activeWindow).toHaveBeenCalledTimes(1));
+    lifecycle.blocked = true;
+    releaseWindow({ window: notepad, screen });
+
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('CHAT_BLOCKED');
+    expect(JSON.stringify(result)).toContain('No further Desktop or clipboard side effect ran');
+    expect(JSON.stringify(result)).not.toMatch(/no (?:local )?tool was run|Nothing was run/i);
+    expect(desktop.actAndCapture).not.toHaveBeenCalled();
+  });
+
+  it('revalidates clipboard authority after browser-chord inspection in a mixed batch', async () => {
+    let releaseWindow!: (value: { window: typeof notepad; screen: typeof screen }) => void;
+    desktop.actAndCapture.mockClear();
+    desktop.activeWindow.mockImplementationOnce(() => new Promise((resolve) => { releaseWindow = resolve; }));
+    desktop.actAndCapture.mockResolvedValueOnce(acted);
+    let policyCtx!: ToolContext;
+    const computer = desktopSurface(
+      { control: true, clipboardRead: true },
+      (ctx) => { policyCtx = ctx; }
+    ).get('computer')!;
+
+    const pending = exactDesktopCall(() => computer.handler({
+      actions: [{ type: 'keypress', keys: ['ctrl', 'w'] }, { type: 'read_clipboard' }]
+    }));
+    await vi.waitFor(() => expect(desktop.activeWindow).toHaveBeenCalledTimes(1));
+    policyCtx.caps.clipboardRead = false;
+    releaseWindow({ window: notepad, screen });
+
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('read_clipboard');
+    expect(desktop.actAndCapture).not.toHaveBeenCalled();
   });
 
   it('never asks about the window for an ordinary key', async () => {
@@ -129,9 +237,46 @@ describe('Desktop computer browser chords', () => {
     desktop.actAndCapture.mockResolvedValueOnce(acted);
     const computer = desktopSurface({ control: true }).get('computer')!;
 
-    const result = await computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'r'] }] });
+    const result = await exactDesktopCall(() => computer.handler({ actions: [{ type: 'keypress', keys: ['ctrl', 'r'] }] }));
     expect(result.isError).toBeFalsy();
     expect(desktop.activeWindow).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ type: 'click_ref', ref: 'g1_s1_e1' }, { control: true }],
+    [{ type: 'set_value', ref: 'g1_s1_e1', text: 'fixture' }, { control: true }],
+    [{ type: 'click', x: 1, y: 1 }, { control: true }],
+    [{ type: 'double_click', x: 1, y: 1 }, { control: true }],
+    [{ type: 'move', x: 1, y: 1 }, { control: true }],
+    [{ type: 'drag', path: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }, { control: true }],
+    [{ type: 'scroll', x: 1, y: 1, scroll_y: 120 }, { control: true }],
+    [{ type: 'type', text: 'fixture' }, { control: true }],
+    [{ type: 'keypress', keys: ['a'] }, { control: true }],
+    [{ type: 'focus', window: 42 }, { control: true }],
+    [{ type: 'write_clipboard', text: 'fixture' }, { clipboardWrite: true }],
+    [{ type: 'read_clipboard' }, { clipboardRead: true }]
+  ] as const)('requires exact Principal before macOS computer action %j reaches native execution', async (action, permissions) => {
+    desktop.actAndCapture.mockClear();
+    desktop.actAndCapture.mockResolvedValue(acted);
+    const computer = desktopSurface(permissions).get('computer')!;
+
+    const denied = await computer.handler({ actions: [action] });
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied)).toContain('CALLER_IDENTITY_REQUIRED');
+    expect(desktop.actAndCapture).not.toHaveBeenCalled();
+
+    const allowed = await exactDesktopCall(() => computer.handler({ actions: [action] }));
+    expect(allowed.isError).not.toBe(true);
+    expect(desktop.actAndCapture).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a wait-only macOS computer batch available without a Principal', async () => {
+    desktop.actAndCapture.mockClear();
+    desktop.actAndCapture.mockResolvedValueOnce(acted);
+    const computer = desktopSurface({ control: true }).get('computer')!;
+    const result = await computer.handler({ actions: [{ type: 'wait', ms: 0 }] });
+    expect(result.isError).not.toBe(true);
+    expect(desktop.actAndCapture).toHaveBeenCalledOnce();
   });
 });
 

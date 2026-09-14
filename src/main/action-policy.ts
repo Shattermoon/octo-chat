@@ -63,7 +63,7 @@ export interface ActionContext {
   readonly target: ActionTarget;
   /** Exact single capability when one exists; composite adapters leave this null. */
   readonly capability: Capability | null;
-  /** PR-09 will replace this null placeholder with the durable WorkspaceLease proof. */
+  /** WS-001 will replace this null placeholder with the durable WorkspaceLease proof. */
   readonly workspaceLease: null;
   readonly operationId: string;
 }
@@ -73,7 +73,7 @@ export type ActionRequirement =
   | { readonly kind: 'capability'; readonly capability: Capability }
   | { readonly kind: 'any-capability'; readonly capabilities: readonly Capability[] };
 
-export const ACTION_POLICY_REASON_CODES = ['allowed', 'read_only', 'capability_disabled'] as const;
+export const ACTION_POLICY_REASON_CODES = ['allowed', 'read_only', 'capability_disabled', 'caller_identity_required'] as const;
 export type ActionPolicyReasonCode = (typeof ACTION_POLICY_REASON_CODES)[number];
 
 export interface ActionPolicyDecision {
@@ -241,6 +241,19 @@ function audit(context: ActionContext): ActionPolicyDecision['auditMetadata'] {
   };
 }
 
+function hasExactPrincipal(principal: Principal): boolean {
+  return !!principal.requestId && !!principal.conversationId && !!principal.localSessionId;
+}
+
+function desktopRequiresExactPrincipal(context: ActionContext): boolean {
+  if (context.sourceSurface !== 'desktop') return false;
+  return context.actionClass === 'launch-application' ||
+    context.actionClass === 'execute-process' ||
+    context.actionClass === 'desktop-interact' ||
+    context.actionClass === 'clipboard-read' ||
+    context.actionClass === 'clipboard-write';
+}
+
 /** Pure product policy. Subsystem-specific checks remain below this decision. */
 export function evaluateActionPolicy(
   context: ActionContext,
@@ -252,6 +265,9 @@ export function evaluateActionPolicy(
   if (requirement.kind === 'none') {
     if (requirement.denyInReadOnly === true && state.readOnly) {
       return { effect: 'deny', reasonCode: 'read_only', effectiveAuthority, auditMetadata };
+    }
+    if (desktopRequiresExactPrincipal(context) && !hasExactPrincipal(context.principal)) {
+      return { effect: 'deny', reasonCode: 'caller_identity_required', effectiveAuthority, auditMetadata };
     }
     return { effect: 'allow', reasonCode: 'allowed', effectiveAuthority, auditMetadata };
   }
@@ -267,12 +283,18 @@ export function evaluateActionPolicy(
   const allowed = requirement.kind === 'capability'
     ? state.capabilities[requirement.capability]
     : required.some(capability => state.capabilities[capability]);
-  if (allowed) return { effect: 'allow', reasonCode: 'allowed', effectiveAuthority, auditMetadata };
+  if (!allowed) {
+    return {
+      effect: 'deny',
+      reasonCode: 'capability_disabled',
+      effectiveAuthority,
+      auditMetadata
+    };
+  }
 
-  return {
-    effect: 'deny',
-    reasonCode: 'capability_disabled',
-    effectiveAuthority,
-    auditMetadata
-  };
+  if (desktopRequiresExactPrincipal(context) && !hasExactPrincipal(context.principal)) {
+    return { effect: 'deny', reasonCode: 'caller_identity_required', effectiveAuthority, auditMetadata };
+  }
+
+  return { effect: 'allow', reasonCode: 'allowed', effectiveAuthority, auditMetadata };
 }

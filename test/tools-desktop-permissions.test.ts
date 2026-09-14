@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Capabilities } from '../src/shared/types.js';
+import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
+
+vi.mock('../src/main/session/store.js', async (original) => ({
+  ...await original<typeof import('../src/main/session/store.js')>(),
+  conversationAttachment: async () => 'current' as const
+}));
 
 const computer = vi.hoisted(() => ({
   actAndCapture: vi.fn(async () => ({
@@ -34,6 +40,25 @@ vi.mock('../src/main/computer/index.js', () => ({
 import { registerMacOSDesktopTools as registerDesktopTools } from '../src/main/mcp/tools-desktop-macos.js';
 import { authorizeToolAction, type ToolContext } from '../src/main/mcp/kernel.js';
 import type { ActionRequirement } from '../src/main/action-policy.js';
+
+let principalSequence = 0;
+function exactDesktopCall<T>(fn: () => Promise<T>): Promise<T> {
+  const id = ++principalSequence;
+  const call: CallContext = {
+    startedAt: Date.now(),
+    transportKey: null,
+    agent: null,
+    caller: {
+      transportKey: null,
+      requestId: `desktop-permission-${id}`,
+      conversationId: `desktop-permission-conversation-${id}`,
+      sessionId: `desktop-permission-session-${id}`
+    },
+    outcome: null,
+    evidence: emptyEvidence()
+  };
+  return runInCallContext(call, fn);
+}
 
 function caps(over: Partial<Capabilities>): Capabilities {
   return {
@@ -78,9 +103,9 @@ describe('macOS Desktop computer permission normalization', () => {
     registerDesktopTools(registrar as never);
     expect(computerHandler).not.toBeNull();
 
-    const result = await computerHandler!({
+    const result = await exactDesktopCall(() => computerHandler!({
       actions: [{ type: 'wait', ms: 0 }, { type: 'read_clipboard' }]
-    });
+    }));
 
     expect(result.isError).not.toBe(true);
     expect(computer.actAndCapture).toHaveBeenCalledWith(
@@ -118,7 +143,7 @@ describe('macOS Desktop computer permission normalization', () => {
     };
     registerDesktopTools(registrar as never);
 
-    const result = await computerHandler!({ actions: [{ type: 'read_clipboard' }] });
+    const result = await exactDesktopCall(() => computerHandler!({ actions: [{ type: 'read_clipboard' }] }));
     const text = result.content[0].text as string;
     expect(text).toContain('truncated');
     expect(text.length).toBeLessThan(70_000);

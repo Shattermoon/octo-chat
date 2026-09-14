@@ -264,6 +264,30 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.requests.filter(request => request.op === 'act')).toHaveLength(1);
   });
 
+  it.runIf(transport === 'stdio')('does not retry paste after clipboard publication when final control authority is revoked', async () => {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    const effects: string[] = [];
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      effects.push(effect);
+      if (effects.length === 3) throw new Error('DESKTOP_AUTHORITY_REVOKED');
+    });
+
+    await expect(computer.act(
+      [{ type: 'paste', text: 'published but not delivered' }],
+      { window: 77, beforeSideEffect }
+    )).rejects.toMatchObject({
+      completedCount: 0,
+      failedIndex: 0,
+      message: expect.stringMatching(/DESKTOP_AUTHORITY_REVOKED.*Clipboard text was replaced; paste delivery is not confirmed/)
+    });
+
+    expect(effects).toEqual(['desktop', 'clipboard-write', 'desktop']);
+    expect(fake.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('published but not delivered');
+    expect(fake.requests.filter(request => request.op === 'act')).toEqual([
+      { op: 'act', targetWindow: 77, actions: [{ type: 'focus', window: 77 }] }
+    ]);
+  });
+
   it.runIf(transport === 'stdio')('does not replace the clipboard when target activation fails before paste', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     fake.overrides.focusFailure = true;
@@ -286,6 +310,81 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     await vi.advanceTimersByTimeAsync(100);
     await rejected;
     expect(fake.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it('does not mutate clipboard when a pinned ref owner retires during the final authority preflight', async () => {
+    const state = await computer.getWindowState({ window: 77 });
+    const sent = fake.requests.length;
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      if (effect !== 'clipboard-write') return;
+      // The policy/lifecycle preflight is allowed to await. If the native owner exits in that
+      // interval, the clipboard effect must not continue under the now-stale observation.
+      await Promise.resolve();
+      fake.children.at(-1)!.close();
+    });
+
+    await expect(computer.act([
+      { type: 'write_clipboard', text: 'must not replace' },
+      { type: 'click_ref', ref: state.elements[0]!.ref }
+    ], { beforeSideEffect })).rejects.toMatchObject({
+      completedCount: 0,
+      failedIndex: 0,
+      message: expect.stringMatching(/STALE_REF/)
+    });
+
+    expect(beforeSideEffect).toHaveBeenCalledExactlyOnceWith('clipboard-write');
+    expect(fake.clipboard.writeText).not.toHaveBeenCalled();
+    expect(fake.requests).toHaveLength(sent);
+  });
+
+  it('rechecks external authority after a local wait before a later native batch', async () => {
+    vi.useFakeTimers();
+    let allowed = true;
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      if (effect === 'desktop' && !allowed) {
+        throw new Error(
+          'CHAT_BLOCKED: the user blocked this conversation from using local tools. ' +
+          'No further Desktop or clipboard side effect ran after this authority change.'
+        );
+      }
+    });
+    const work = computer.act([
+      { type: 'wait', ms: 100 },
+      { type: 'type', text: 'must not be typed' }
+    ], { beforeSideEffect });
+    const settled = work.catch((error) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    allowed = false;
+    const sent = fake.requests.length;
+    await vi.advanceTimersByTimeAsync(100);
+    const error = await settled;
+    expect(error).toMatchObject({
+      completedCount: 1,
+      failedIndex: 1,
+      message: expect.stringMatching(/PARTIAL_BATCH: completed_count=1 failed_index=1.*CHAT_BLOCKED/)
+    });
+    expect(error.message).toContain('No further Desktop or clipboard side effect ran');
+    expect(error.message).not.toMatch(/no (?:local )?tool was run|Nothing was run/i);
+    expect(beforeSideEffect).toHaveBeenCalledWith('desktop');
+    expect(fake.requests).toHaveLength(sent);
+  });
+
+  it('does not send native input when the selected helper retires during final authority preflight', async () => {
+    await computer.listWindows();
+    const sent = fake.requests.length;
+    const beforeSideEffect = vi.fn(async (effect: string) => {
+      if (effect !== 'desktop') return;
+      await Promise.resolve();
+      fake.children.at(-1)!.close();
+    });
+
+    await expect(computer.act(
+      [{ type: 'type', text: 'must not be typed' }],
+      { beforeSideEffect }
+    )).rejects.toThrow(/desktop helper changed/i);
+
+    expect(beforeSideEffect).toHaveBeenCalledExactlyOnceWith('desktop');
+    expect(fake.requests).toHaveLength(sent);
   });
 
   it('retains completed input evidence if the subsequent screenshot fails', async () => {

@@ -1,17 +1,36 @@
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
+const fixture = vi.hoisted(() => ({ attachment: vi.fn(async () => 'current' as 'current' | 'superseded' | 'unknown') }));
 vi.mock('../src/main/session/recorder.js', async original => ({
   ...await original<typeof import('../src/main/session/recorder.js')>(),
   recordToolCall: async () => null
 }));
 vi.mock('../src/main/session/store.js', async original => ({
   ...await original<typeof import('../src/main/session/store.js')>(),
-  conversationAttachment: async () => 'current'
+  conversationAttachment: fixture.attachment
 }));
-import { dispatch, ok } from '../src/main/mcp/kernel.js';
-import { currentCall } from '../src/main/mcp/call-context.js';
+import { assertCurrentCallLifecycle, dispatch, ok } from '../src/main/mcp/kernel.js';
+import { currentCall, emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
 import { observeRequestCorrelation } from '../src/main/session/correlation.js';
 
-it.each(['get_window_state', 'click', 'scroll', 'drag', 'set_value', 'perform_secondary_action'])(
+beforeEach(() => {
+  fixture.attachment.mockReset();
+  fixture.attachment.mockResolvedValue('current');
+});
+
+it.each([
+  'get_window_state',
+  'launch_app',
+  'click',
+  'press_key',
+  'type_text',
+  'scroll',
+  'set_value',
+  'drag',
+  'perform_secondary_action',
+  'activate_window',
+  'read_clipboard',
+  'write_clipboard'
+])(
   'resolves late exact identity before Desktop %s consumes observation state', async name => {
     const requestId = `late-desktop-${name}`;
     const run = vi.fn(async () => {
@@ -27,3 +46,66 @@ it.each(['get_window_state', 'click', 'scroll', 'drag', 'set_value', 'perform_se
     expect(run).toHaveBeenCalledOnce();
   }
 );
+
+it('resolves late exact identity before the macOS composite computer surface can mutate', async () => {
+  const requestId = 'late-desktop-computer';
+  const run = vi.fn(async () => {
+    expect(currentCall()?.caller).toMatchObject({
+      requestId,
+      conversationId: 'desktop-computer-chat',
+      sessionId: 'desktop-computer-session'
+    });
+    return ok('mutated');
+  });
+  const pending = dispatch(
+    'computer',
+    { actions: [{ type: 'write_clipboard', text: 'fixture' }] },
+    null,
+    requestId,
+    'desktop',
+    run
+  );
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(run).not.toHaveBeenCalled();
+  observeRequestCorrelation({
+    requestId,
+    conversationId: 'desktop-computer-chat',
+    sessionId: 'desktop-computer-session',
+    messageId: 'message-computer',
+    tool: 'computer',
+    observedAt: Date.now()
+  });
+  expect((await pending).isError).not.toBe(true);
+  expect(run).toHaveBeenCalledOnce();
+});
+
+it('does not require identity merely to run a local wait-only Desktop batch', async () => {
+  const run = vi.fn(async () => ok('waited'));
+  const result = await dispatch('computer', { actions: [{ type: 'wait', ms: 0 }] }, null, 'wait-only', 'desktop', run);
+  expect(result).toEqual(ok('waited'));
+  expect(run).toHaveBeenCalledOnce();
+});
+
+it('fail-closes an in-flight sensitive Desktop call when its exact attachment disappears', async () => {
+  let resolveAttachment!: (value: 'current' | 'superseded' | 'unknown') => void;
+  fixture.attachment.mockImplementationOnce(() => new Promise(resolve => { resolveAttachment = resolve; }));
+  const call: CallContext = {
+    startedAt: Date.now(),
+    transportKey: null,
+    agent: null,
+    caller: {
+      transportKey: null,
+      requestId: 'pending-desktop-request',
+      conversationId: 'pending-desktop-chat',
+      sessionId: 'pending-desktop-session'
+    },
+    outcome: null,
+    evidence: emptyEvidence()
+  };
+
+  const pending = runInCallContext(call, assertCurrentCallLifecycle);
+  await vi.waitFor(() => expect(fixture.attachment).toHaveBeenCalledWith('pending-desktop-chat', 'pending-desktop-session'));
+  resolveAttachment('unknown');
+
+  await expect(pending).rejects.toThrow(/CALLER_IDENTITY_REQUIRED.*no longer has its exact current session\/chat attachment/i);
+});

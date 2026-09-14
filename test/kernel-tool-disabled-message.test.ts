@@ -74,6 +74,23 @@ it('names the actual Settings permission when a capability is revoked', async ()
   expect(action).not.toHaveBeenCalled();
 });
 
+it('returns a typed identity refusal before an unattributed Desktop mutation runs', async () => {
+  const tools = createRegistrar(null, {
+    roots: [],
+    readOnly: false,
+    caps: { ...DEFAULT_CAPABILITIES, control: true },
+    sessionTools: false,
+    agentTools: false
+  }, 'desktop');
+  const action = vi.fn(async () => ok('unexpected'));
+
+  const result = await tools.guarded('control', 'launch_app', action);
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result)).toContain('CALLER_IDENTITY_REQUIRED');
+  expect(JSON.stringify(result)).toContain('request/chat/session identity');
+  expect(action).not.toHaveBeenCalled();
+});
+
 it.each(WRITE_CAPABILITIES)('explains the Read-only override for %s without running it', async cap => {
   const action = vi.fn(async () => ok('changed'));
   const result = await registrar(true, { [cap]: true }).guarded(cap, 'mutation', action);
