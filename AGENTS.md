@@ -1911,8 +1911,10 @@ Opt-in live plugin probes are separate evidence, not implied by the ordinary sui
 
 When delegation is authorized, reuse a suitable worker. Give each assignment the project,
 concrete task, evidence, allowed files, ownership boundaries, checks and expected handoff.
-Use at most seven direct development subagents concurrently and explicitly prohibit nested
-delegation. Audit-only means no source/test/config/AppData writes beyond the named report.
+Use at most **seven direct development subagents concurrently**; this is an absolute hard cap for
+the coding workflow, so never spawn an eighth development subagent. Explicitly prohibit nested
+delegation. This coding-workflow cap is separate from the product's configurable in-app worker
+capacity. Audit-only means no source/test/config/AppData writes beyond the named report.
 The prime independently verifies important claims; parallel reports are hypotheses, not votes.
 
 For the current hardening program, use `docs/octo-chat-full-audit-2026-09-14.md` as the finding
