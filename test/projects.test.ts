@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, expect, it } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { bindBrowserInputProject, claimBrowserInput, enqueueInput, listInputs, resetInputForTests } from '../src/main/session/input.js';
 import { defaultConfig, initConfigPath, saveConfig } from '../src/main/config.js';
 import { initDurableStore, resetDurableForTests } from '../src/main/durable.js';
-import { createSession, getSession, initSessionStore, rebindSession, resetSessionStoreForTests, setSessionOrigin } from '../src/main/session/store.js';
+import { createSession, deleteSession, getSession, initSessionStore, rebindSession, resetSessionStoreForTests, sessionsRoot, setSessionOrigin } from '../src/main/session/store.js';
 import { addProject, assignSessionProject, getSessionProject, inheritSessionProject, listProjects, removeProject } from '../src/main/projects.js';
 import { validateNewRoot } from '../src/main/sandbox.js';
 
@@ -23,7 +23,7 @@ beforeEach(async () => {
   initConfigPath(directory); initDurableStore(directory); initSessionStore(directory);
   await saveConfig({ ...defaultConfig(), roots: [{ name: 'work', path: approved }] });
 });
-afterEach(async () => { resetSessionStoreForTests(); resetDurableForTests(); await fs.rm(directory, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); resetSessionStoreForTests(); resetDurableForTests(); await fs.rm(directory, { recursive: true, force: true }); });
 
 it('persists one project per canonical directory and validates approved directories', async () => {
   const [one, again] = await Promise.all([addProject(path.join(approved, 'first')), addProject(path.join(approved, 'first'))]);
@@ -86,6 +86,53 @@ it('binds a claimed fresh input before evidence without acknowledging delivery o
   expect(await bindBrowserInputProject(entry.id, 'document', 'conversation-two')).toBe(false);
   expect(await rebindSession(bound.deliveredSessionId!, 'conversation-one', 'conversation-replacement')).toBe(true);
   expect(await bindBrowserInputProject(entry.id, 'document', 'conversation-one')).toBe(false);
+});
+
+it('waits for a cold session delete before project binding can create a replacement conversation', async () => {
+  const project = await addProject(path.join(approved, 'first'));
+  const conversationId = 'project-delete-race';
+  const existing = await createSession({ title: 'Existing owner', conversationId });
+  const entry = await enqueueInput({ id: randomUUID(), projectId: project.id, sessionId: null, text: 'Keep this owner', dueAt: 0, mode: 'auto', model: null, reasoningEffort: null });
+  expect(await claimBrowserInput(entry.id, 'document', null)).toMatchObject({ projectId: project.id });
+
+  // Simulate restart: deletion starts with no open row and no attachment catalog. Hold the first
+  // metadata read so project binding reaches the exact unresolved-lineage window SES-001 fences.
+  resetSessionStoreForTests();
+  initSessionStore(directory);
+  let release!: () => void;
+  let entered!: () => void;
+  const reached = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const realRead = fs.readFile.bind(fs);
+  let paused = false;
+  vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+    if (!paused && String(args[0]) === path.join(sessionsRoot(), existing.id, 'meta.json')) {
+      paused = true;
+      entered();
+      await held;
+    }
+    return realRead(...args);
+  });
+  const realRename = fs.rename.bind(fs);
+  vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (String(from) === path.join(sessionsRoot(), existing.id) && path.basename(String(to)).startsWith('.deleted-')) {
+      throw Object.assign(new Error('project delete commit failed'), { code: 'EBUSY' });
+    }
+    return realRename(from, to);
+  });
+
+  const deleting = deleteSession(existing.id);
+  await reached;
+  let settled = false;
+  const binding = bindBrowserInputProject(entry.id, 'document', conversationId).then((value) => { settled = true; return value; });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  release();
+  await expect(deleting).rejects.toMatchObject({ code: 'EBUSY' });
+  expect(await binding).toBe(true);
+  const bound = (await listInputs()).find(row => row.id === entry.id)!;
+  expect(bound.deliveredSessionId).toBe(existing.id);
+  expect((await getSession(existing.id))?.projectId).toBe(project.id);
 });
 
 it('retains project ownership through restart, resume and exact worker origins', async () => {

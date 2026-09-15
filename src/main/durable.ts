@@ -33,6 +33,8 @@ const pending = new Map<string, PendingWrite>();
 const timers = new Map<string, NodeJS.Timeout>();
 const retryAttempts = new Map<string, number>();
 const inFlight = new Map<string, Promise<void>>();
+const journalInFlight = new Map<string, Promise<void>>();
+const journalPoisoned = new Map<string, Error>();
 let nextGeneration = 1;
 
 export function initDurableStore(userDataDir: string): void {
@@ -48,6 +50,11 @@ function fileFor(name: string): string {
   return path.join(root, `${name}.json`);
 }
 
+function journalFileFor(name: string): string {
+  if (!/^[a-z0-9-]{1,40}$/.test(name)) throw new Error(`Invalid durable journal name: ${name}`);
+  return path.join(root, `${name}.jsonl`);
+}
+
 export async function readDurable<T>(name: string): Promise<T | null> {
   if (!root) return null;
   try {
@@ -60,6 +67,147 @@ export async function readDurable<T>(name: string): Promise<T | null> {
     }
     return null;
   }
+}
+
+/**
+ * Reads security-sensitive legacy state without converting corruption or I/O failure into absence.
+ * ENOENT alone means there is no older state to migrate.
+ */
+export async function readDurableStrict<T>(name: string): Promise<T | null> {
+  if (!root) throw new Error('Durable store is not initialized');
+  try {
+    const raw = await fs.readFile(fileFor(name), 'utf8');
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    logWarn(`could not read security-sensitive ${name} state: ${(err as Error).message}`);
+    throw err;
+  }
+}
+
+/** Reads an append-only security journal. Only ENOENT is an empty journal. */
+export async function readDurableJournal<T>(name: string): Promise<T[]> {
+  if (!root) throw new Error('Durable store is not initialized');
+  let raw: string;
+  try {
+    raw = await fs.readFile(journalFileFor(name), 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return [];
+    logWarn(`could not read ${name} journal: ${(err as Error).message}`);
+    throw err;
+  }
+  const rows: T[] = [];
+  const terminated = raw.endsWith('\n');
+  const lines = raw.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (!line.trim()) continue;
+    // Only the final unterminated fragment can be an unacknowledged crash append. A malformed
+    // newline-terminated record sat inside a commit boundary and must fail closed: silently
+    // skipping it could turn an immutable security fact back into "unowned".
+    if (!terminated && index === lines.length - 1) break;
+    try { rows.push(JSON.parse(line) as T); }
+    catch { throw new Error(`Durable ${name} journal contains a malformed committed record`); }
+  }
+  return rows;
+}
+
+/** Whether a journal file exists. Read errors are authority failures, not absence. */
+export async function durableJournalExists(name: string): Promise<boolean> {
+  if (!root) throw new Error('Durable store is not initialized');
+  try {
+    return (await fs.stat(journalFileFor(name))).isFile();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+function enqueueJournal(name: string, write: () => Promise<void>): Promise<void> {
+  const queued = (journalInFlight.get(name) ?? Promise.resolve()).then(write);
+  const tracked = queued.catch(() => undefined).then(() => {
+    if (journalInFlight.get(name) === tracked) journalInFlight.delete(name);
+  });
+  journalInFlight.set(name, tracked);
+  return queued;
+}
+
+async function discardTornJournalTail(file: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    handle = await fs.open(file, 'r+');
+    const stat = await handle.stat();
+    if (stat.size === 0) return;
+    const byte = Buffer.alloc(1);
+    await handle.read(byte, 0, 1, stat.size - 1);
+    if (byte[0] === 0x0a) return;
+
+    // Search backwards for the last committed newline without materialising an unbounded journal.
+    // Everything after it belongs to the one append whose process died before completion.
+    const chunk = Buffer.allocUnsafe(4096);
+    let cursor = stat.size;
+    while (cursor > 0) {
+      const wanted = Math.min(chunk.length, cursor);
+      cursor -= wanted;
+      const { bytesRead } = await handle.read(chunk, 0, wanted, cursor);
+      for (let at = bytesRead - 1; at >= 0; at--) {
+        if (chunk[at] !== 0x0a) continue;
+        await handle.truncate(cursor + at + 1);
+        return;
+      }
+    }
+    await handle.truncate(0);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Appends one immutable journal record and returns only after that exact append has completed.
+ *
+ * Appends to one journal are serialized. This is deliberately an admission barrier rather than a
+ * debounced projection: callers may publish the fact to other subsystems only after this promise
+ * resolves. A rejected append publishes nothing and is safe for the caller to retry.
+ */
+export async function appendDurableJournal(name: string, value: unknown): Promise<void> {
+  if (!root) throw new Error('Durable store is not initialized');
+  const line = `${JSON.stringify(value)}\n`;
+  await enqueueJournal(name, async () => {
+    const poisoned = journalPoisoned.get(name);
+    if (poisoned) throw poisoned;
+    await fs.mkdir(root, { recursive: true });
+    const file = journalFileFor(name);
+    await discardTornJournalTail(file);
+    let before = 0;
+    try {
+      before = (await fs.stat(file)).size;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    try {
+      await fs.appendFile(file, line, 'utf8');
+    } catch (error) {
+      // appendFile may reject after writing all or part of the bytes. Until that ambiguity is
+      // removed, allowing another first-owner commit could make restart order disagree with the
+      // owners we ACKed in memory. Roll back to the exact pre-append boundary; if rollback itself
+      // fails, poison this journal for the rest of the process and fail closed.
+      try {
+        await fs.truncate(file, before);
+      } catch (rollbackError) {
+        if (before === 0 && (rollbackError as NodeJS.ErrnoException).code === 'ENOENT') throw error;
+        const poisonedError = new Error(
+          `Durable ${name} journal append failed and rollback also failed: ${(rollbackError as Error).message}`
+        );
+        journalPoisoned.set(name, poisonedError);
+        throw poisonedError;
+      }
+      throw error;
+    }
+  });
 }
 
 function nextWrite(value: unknown): PendingWrite {
@@ -191,7 +339,7 @@ export async function flushDurable(): Promise<void> {
   // so shutdown must look at pending state itself rather than treating `timers` as authority.
   for (;;) {
     const entries = [...pending.entries()];
-    const active = [...inFlight.values()];
+    const active = [...inFlight.values(), ...journalInFlight.values()];
     if (entries.length === 0 && active.length === 0) return;
     // Start pending independent files before waiting for a busy file. Reuse an admitted
     // generation's promise so shutdown cannot write an immediate commit twice.
@@ -211,4 +359,6 @@ export function resetDurableForTests(): void {
   root = '';
   nextGeneration = 1;
   inFlight.clear();
+  journalInFlight.clear();
+  journalPoisoned.clear();
 }

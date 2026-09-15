@@ -1,8 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushDurable, initDurableStore, resetDurableForTests, writeDurableNow } from '../src/main/durable.js';
+import { appendDurableJournal, flushDurable, initDurableStore, readDurable, resetDurableForTests, writeDurableNow } from '../src/main/durable.js';
 import {
   appendEvent,
   createSession,
@@ -13,11 +14,34 @@ import {
 import {
   observeRequestCorrelation,
   observeRequestCorrelations,
+  commitRequestCorrelations,
   requestCorrelation,
   awaitRequestCorrelation,
   restoreRequestCorrelations,
   resetCorrelationRegistryForTests
 } from '../src/main/session/correlation.js';
+
+function attributedToolEvent(seq: number, requestId: string, conversationId: string, time = seq) {
+  return {
+    seq,
+    time,
+    source: 'mcp',
+    kind: 'tool_call',
+    call: {
+      callId: `call-${requestId}`,
+      tool: 'read',
+      attribution: 'request_id',
+      requestId,
+      conversationId,
+      attributionMethod: 'request_id',
+      args: { text: '{}', truncated: false, chars: 2 },
+      result: { text: 'ok', truncated: false, chars: 2 },
+      outcome: 'ok',
+      durationMs: 1,
+      summary: { kind: 'read', tone: 'neutral', title: `Read ${requestId}` }
+    }
+  };
+}
 
 describe('request correlation ownership', () => {
   beforeEach(() => resetCorrelationRegistryForTests());
@@ -194,7 +218,7 @@ describe('request correlation ownership', () => {
     expect(requestCorrelation(requestId)?.conversationId).toBe('conv-a');
   });
 
-  it('evicts by latest same-owner observation rather than original insertion order', () => {
+  it('never evicts immutable ownership when diagnostics exceed the former 50k bound', () => {
     const refreshedId = 'wfr_refreshed_old_request';
     const correlation = (requestId: string, observedAt: number) => ({
       requestId,
@@ -205,8 +229,8 @@ describe('request correlation ownership', () => {
       observedAt
     });
 
-    // Fill the bounded registry exactly. The request we care about is deliberately the oldest
-    // insertion, then is observed again immediately before one new id forces an eviction.
+    // Fill beyond the old authority bound. Diagnostic context may be pressure-evicted, but the
+    // first owner is a security fact and must survive indefinitely.
     observeRequestCorrelations([
       correlation(refreshedId, 1),
       ...Array.from({ length: 49_999 }, (_, index) => correlation(`wfr_fill_${index}`, index + 2))
@@ -222,7 +246,110 @@ describe('request correlation ownership', () => {
 
     expect(requestCorrelation(refreshedId)?.conversationId).toBe('conv-a');
     expect(requestCorrelation(refreshedId)?.observedAt).toBe(100_000);
-    expect(requestCorrelation('wfr_fill_0')).toBeNull();
+    expect(requestCorrelation('wfr_fill_0')?.conversationId).toBe('conv-a');
+    expect(requestCorrelation('wfr_fill_0')?.sessionId).toBe('session-a');
+  });
+
+  it('does not publish a first owner until its exact journal append commits', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-barrier-'));
+    try {
+      resetDurableForTests();
+      initDurableStore(dir);
+      let release!: () => void;
+      let entered!: () => void;
+      const reached = new Promise<void>((resolve) => { entered = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const realAppend = fs.appendFile.bind(fs);
+      vi.spyOn(fs, 'appendFile').mockImplementationOnce(async (...args) => {
+        entered();
+        await gate;
+        return realAppend(...args);
+      });
+      const committing = commitRequestCorrelations([{
+        requestId: 'wfr_commit_barrier', conversationId: 'conv-barrier', sessionId: 'session-barrier',
+        messageId: 'message-barrier', tool: 'read', observedAt: 1
+      }]);
+      await reached;
+      expect(requestCorrelation('wfr_commit_barrier')).toBeNull();
+      release();
+      await expect(committing).resolves.toEqual(['stored']);
+      expect(requestCorrelation('wfr_commit_barrier')?.conversationId).toBe('conv-barrier');
+    } finally {
+      vi.restoreAllMocks();
+      resetCorrelationRegistryForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not publish an owner when the journal commit fails', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-failed-commit-'));
+    try {
+      resetDurableForTests();
+      initDurableStore(dir);
+      vi.spyOn(fs, 'appendFile').mockRejectedValueOnce(Object.assign(new Error('disk failed'), { code: 'EIO' }));
+      await expect(commitRequestCorrelations([{
+        requestId: 'wfr_failed_commit', conversationId: 'conv-failed', sessionId: 'session-failed',
+        messageId: 'message-failed', tool: 'read', observedAt: 1
+      }])).rejects.toMatchObject({ code: 'EIO' });
+      expect(requestCorrelation('wfr_failed_commit')).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+      resetCorrelationRegistryForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps journal authority when a stale v5 snapshot disagrees after downgrade', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-journal-wins-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      await appendDurableJournal('request-owners', {
+        version: 1,
+        owners: [{ requestId: 'wfr_journal_wins', conversationId: 'conv-first', sessionId: 'session-first' }]
+      });
+      await writeDurableNow('request-correlations', {
+        version: 5,
+        entries: [{
+          requestId: 'wfr_journal_wins', conversationId: 'conv-stale', sessionId: 'session-stale',
+          messageId: 'stale', tool: 'read', observedAt: 999
+        }]
+      });
+      resetCorrelationRegistryForTests();
+      await restoreRequestCorrelations();
+      expect(requestCorrelation('wfr_journal_wins')?.conversationId).toBe('conv-first');
+      expect(requestCorrelation('wfr_journal_wins')?.sessionId).toBe('session-first');
+    } finally {
+      vi.restoreAllMocks();
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on an unsupported committed owner-journal schema', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-bad-journal-schema-'));
+    try {
+      resetDurableForTests();
+      initDurableStore(dir);
+      await appendDurableJournal('request-owners', {
+        version: 99,
+        owners: [{ requestId: 'wfr_bad_schema', conversationId: 'conv-bad', sessionId: 'session-bad' }]
+      });
+      resetCorrelationRegistryForTests();
+      await expect(restoreRequestCorrelations()).rejects.toThrow('unsupported or invalid committed record');
+      expect(requestCorrelation('wfr_bad_schema')).toBeNull();
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('restores proven request ownership from durable state after an app restart', async () => {
@@ -231,15 +358,14 @@ describe('request correlation ownership', () => {
       resetDurableForTests();
       initDurableStore(dir);
       const requestId = 'wfr_survives_restart';
-      observeRequestCorrelation({
+      await commitRequestCorrelations([{
         requestId,
         conversationId: 'conv-durable',
         sessionId: 'session-durable',
         messageId: 'msg-durable',
         tool: 'read',
         observedAt: 123
-      });
-      await flushDurable();
+      }]);
 
       resetCorrelationRegistryForTests();
       expect(requestCorrelation(requestId)).toBeNull();
@@ -268,15 +394,14 @@ describe('request correlation ownership', () => {
       resetDurableForTests();
       initDurableStore(dir);
       const requestId = 'f0f00012-1111-4111-8111-111111111111';
-      observeRequestCorrelation({
+      await commitRequestCorrelations([{
         requestId,
         conversationId: 'conv-bare-request-id',
         sessionId: '2026-01-01-00000028',
         messageId: 'f0f00013-1111-4111-8111-111111111111',
         tool: '',
         observedAt: 1_788_276_631_192
-      });
-      await flushDurable();
+      }]);
 
       resetCorrelationRegistryForTests();
       await restoreRequestCorrelations();
@@ -337,6 +462,7 @@ describe('request correlation ownership', () => {
         })
       ).toBe('stored');
     } finally {
+      vi.restoreAllMocks();
       resetCorrelationRegistryForTests();
       resetSessionStoreForTests();
       unsetSessionRootForTests();
@@ -386,6 +512,334 @@ describe('request correlation ownership', () => {
       expect(requestCorrelation('wfr_history')?.conversationId).toBe('conv-history');
       expect(requestCorrelation('wfr_history')?.sessionId).toBe(session.id);
     } finally {
+      vi.restoreAllMocks();
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates an owner older than the former 1,024-event recovery window', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-full-history-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const conversationId = 'conv-full-history';
+      const session = await createSession({ title: 'deep attributed history', conversationId });
+      const eventFile = path.join(dir, 'sessions', session.id, 'events.jsonl');
+      const target = {
+        seq: 2,
+        time: 2,
+        source: 'mcp',
+        kind: 'tool_call',
+        call: {
+          callId: 'call-deep-history', tool: 'read', attribution: 'request_id',
+          requestId: 'wfr_deep_history', conversationId, attributionMethod: 'request_id',
+          args: { text: '{}', truncated: false, chars: 2 },
+          result: { text: 'ok', truncated: false, chars: 2 }, outcome: 'ok', durationMs: 1,
+          summary: { kind: 'read', tone: 'neutral', title: 'Deep history' }
+        }
+      };
+      // Thousands of exact rows for one workflow exercise the streaming reducer directly: migration
+      // must retain one recovered owner, not one in-memory object per historical tool call.
+      const filler = Array.from({ length: 1_100 }, (_, index) =>
+        JSON.stringify(attributedToolEvent(index + 3, 'wfr_deep_history', conversationId, index + 3))
+      );
+      const original = await fs.readFile(eventFile, 'utf8');
+      await fs.writeFile(eventFile, `${original}${JSON.stringify(target)}\n${filler.join('\n')}\n`, 'utf8');
+
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      const readSizes: number[] = [];
+      const realOpen = fs.open.bind(fs);
+      vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+        const handle = await realOpen(...args);
+        if (String(args[0]) === eventFile) {
+          const realRead = handle.read.bind(handle);
+          (handle as any).read = async (...readArgs: any[]) => {
+            if (typeof readArgs[2] === 'number') readSizes.push(readArgs[2]);
+            return (realRead as any)(...readArgs);
+          };
+        }
+        return handle;
+      });
+      await restoreRequestCorrelations();
+      expect(requestCorrelation('wfr_deep_history')).toMatchObject({
+        conversationId,
+        sessionId: session.id
+      });
+      expect(readSizes.length).toBeGreaterThan(1);
+      expect(Math.max(...readSizes)).toBeLessThanOrEqual(64 * 1024);
+    } finally {
+      vi.restoreAllMocks();
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers request ownership appended by an older build after the stored history watermark', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-watermark-suffix-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const conversationId = 'conv-watermark-suffix';
+      const session = await createSession({ title: 'watermark suffix', conversationId });
+      await appendEvent(session.id, attributedToolEvent(1, 'wfr_before_watermark', conversationId) as any);
+
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      expect(requestCorrelation('wfr_before_watermark')?.conversationId).toBe(conversationId);
+      const firstWatermark = await readDurable<{ version: number; sessions: Record<string, number> }>('request-owner-migration');
+      const committed = firstWatermark?.sessions[session.id] ?? 0;
+      expect(committed).toBeGreaterThan(0);
+
+      // Simulate an older binary appending exact attributed history and crashing before its
+      // debounced v5 correlation snapshot changed. Only growth beyond our per-session watermark
+      // can reveal this on re-upgrade.
+      const eventFile = path.join(dir, 'sessions', session.id, 'events.jsonl');
+      await fs.appendFile(eventFile, `${JSON.stringify(attributedToolEvent(2, 'wfr_after_watermark', conversationId, 2))}\n`, 'utf8');
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      expect(requestCorrelation('wfr_after_watermark')).toMatchObject({ conversationId, sessionId: session.id });
+      const nextWatermark = await readDurable<{ version: number; sessions: Record<string, number> }>('request-owner-migration');
+      expect(nextWatermark?.sessions[session.id]).toBeGreaterThan(committed);
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('imports a legacy snapshot-only owner even after history already has a watermark', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-watermark-snapshot-fallback-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const session = await createSession({ title: 'snapshot fallback', conversationId: 'conv-watermark-existing' });
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      expect((await readDurable<{ sessions: Record<string, number> }>('request-owner-migration'))?.sessions[session.id]).toBeGreaterThanOrEqual(0);
+
+      await writeDurableNow('request-correlations', {
+        version: 5,
+        entries: [{
+          requestId: 'wfr_snapshot_only_after_watermark',
+          conversationId: 'conv-snapshot-only',
+          sessionId: 'session-snapshot-only',
+          messageId: 'snapshot-only',
+          tool: '',
+          observedAt: 100
+        }]
+      });
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      expect(requestCorrelation('wfr_snapshot_only_after_watermark')).toMatchObject({
+        conversationId: 'conv-snapshot-only', sessionId: 'session-snapshot-only'
+      });
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when unjournaled legacy snapshot and retained exact history disagree', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-history-wins-snapshot-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const session = await createSession({ title: 'history wins', conversationId: 'conv-original-history' });
+      await fs.appendFile(
+        path.join(dir, 'sessions', session.id, 'events.jsonl'),
+        `${JSON.stringify(attributedToolEvent(1, 'wfr_history_wins_snapshot', 'conv-original-history', 1))}\n`,
+        'utf8'
+      );
+      await writeDurableNow('request-correlations', {
+        version: 5,
+        entries: [{
+          requestId: 'wfr_history_wins_snapshot', conversationId: 'conv-stale-rebound', sessionId: 'session-stale-rebound',
+          messageId: 'stale-rebound', tool: 'read', observedAt: 999
+        }]
+      });
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await expect(restoreRequestCorrelations()).rejects.toThrow(
+        'Request ownership migration conflict for wfr_history_wins_snapshot'
+      );
+      expect(requestCorrelation('wfr_history_wins_snapshot')).toBeNull();
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when retained exact history contains two owners and no legacy snapshot can resolve them', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-history-conflict-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const first = await createSession({ title: 'first history owner', conversationId: 'conv-history-first' });
+      const rebound = await createSession({ title: 'rebound history owner', conversationId: 'conv-history-rebound' });
+      const requestId = 'wfr_history_owner_conflict';
+      await fs.appendFile(
+        path.join(dir, 'sessions', first.id, 'events.jsonl'),
+        `${JSON.stringify(attributedToolEvent(1, requestId, 'conv-history-first', 100))}\n`,
+        'utf8'
+      );
+      await fs.appendFile(
+        path.join(dir, 'sessions', rebound.id, 'events.jsonl'),
+        `${JSON.stringify(attributedToolEvent(1, requestId, 'conv-history-rebound', 1))}\n`,
+        'utf8'
+      );
+
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await expect(restoreRequestCorrelations()).rejects.toThrow(
+        `Request ownership migration conflict for ${requestId}: retained history contains different owners`
+      );
+      expect(requestCorrelation(requestId)).toBeNull();
+      expect(await readDurable('request-owner-migration')).toBeNull();
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not advance a history watermark across an unterminated crash tail', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-watermark-torn-tail-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const session = await createSession({ title: 'torn watermark', conversationId: 'conv-torn-watermark' });
+      await appendEvent(session.id, attributedToolEvent(1, 'wfr_torn_seed', 'conv-torn-watermark') as any);
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      const first = await readDurable<{ sessions: Record<string, number> }>('request-owner-migration');
+      const committed = first!.sessions[session.id]!;
+      await fs.appendFile(path.join(dir, 'sessions', session.id, 'events.jsonl'), '{"seq":999,"kind":"tool_call"', 'utf8');
+
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      const second = await readDurable<{ sessions: Record<string, number> }>('request-owner-migration');
+      expect(second!.sessions[session.id]).toBe(committed);
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('full-scans a session when its event file shrank below the stored watermark', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-watermark-shrink-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const conversationId = 'conv-watermark-shrink';
+      const session = await createSession({ title: 'watermark shrink', conversationId });
+      for (let index = 0; index < 8; index++) {
+        await appendEvent(session.id, { time: index + 1, source: 'app', kind: 'progress',
+          message: { text: 'padding-padding-padding', truncated: false, chars: 23 } });
+      }
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      const previous = (await readDurable<{ sessions: Record<string, number> }>('request-owner-migration'))!.sessions[session.id]!;
+
+      const replacement = `${JSON.stringify(attributedToolEvent(1, 'wfr_after_shrink', conversationId, 1))}\n`;
+      expect(Buffer.byteLength(replacement)).toBeLessThan(previous);
+      await fs.writeFile(path.join(dir, 'sessions', session.id, 'events.jsonl'), replacement, 'utf8');
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+      expect(requestCorrelation('wfr_after_shrink')).toMatchObject({ conversationId, sessionId: session.id });
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not reopen an unchanged events journal once its committed-byte watermark matches size', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-watermark-hot-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      const conversationId = 'conv-watermark-hot';
+      const session = await createSession({ title: 'watermark hot', conversationId });
+      await appendEvent(session.id, attributedToolEvent(1, 'wfr_watermark_hot', conversationId) as any);
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      await restoreRequestCorrelations();
+
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      const eventFile = path.join(dir, 'sessions', session.id, 'events.jsonl');
+      const open = vi.spyOn(fs, 'open');
+      await restoreRequestCorrelations();
+      expect(open.mock.calls.filter(([file]) => String(file) === eventFile)).toHaveLength(0);
+    } finally {
+      vi.restoreAllMocks();
+      resetCorrelationRegistryForTests();
+      resetSessionStoreForTests();
+      unsetSessionRootForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the legacy correlation snapshot is corrupt before migration', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-corrupt-legacy-'));
+    try {
+      resetDurableForTests();
+      resetSessionStoreForTests();
+      initDurableStore(dir);
+      initSessionStore(dir);
+      await fs.mkdir(path.join(dir, 'state'), { recursive: true });
+      await fs.writeFile(path.join(dir, 'state', 'request-correlations.json'), '{not-json', 'utf8');
+      resetCorrelationRegistryForTests();
+      await expect(restoreRequestCorrelations()).rejects.toBeInstanceOf(SyntaxError);
+    } finally {
       resetCorrelationRegistryForTests();
       resetSessionStoreForTests();
       unsetSessionRootForTests();
@@ -422,28 +876,21 @@ describe('request correlation ownership', () => {
         }
       });
 
-      observeRequestCorrelation({
-        requestId: 'wfr_old_snapshot',
-        conversationId,
-        sessionId: session.id,
-        messageId: 'msg-old',
-        tool: 'read',
-        observedAt: 1
+      await writeDurableNow('request-correlations', {
+        version: 5,
+        entries: [{
+          requestId: 'wfr_old_snapshot',
+          conversationId,
+          sessionId: session.id,
+          messageId: 'msg-old',
+          tool: 'read',
+          observedAt: 1
+        }]
       });
       await appendEvent(session.id, toolCall('call-old', 'wfr_old_snapshot', 1));
-      await flushDurable(); // saved index contains only the old request
-
-      observeRequestCorrelation({
-        requestId: 'wfr_new_history',
-        conversationId,
-        sessionId: session.id,
-        messageId: 'msg-new',
-        tool: 'read',
-        observedAt: 2
-      });
       await appendEvent(session.id, toolCall('call-new', 'wfr_new_history', 2));
-      // Lose process memory before the debounced index write catches up. Session JSONL is
-      // already durable, so restore must merge it into the older valid snapshot.
+      // The old v5 snapshot knows only the first owner. Full one-time migration must recover the
+      // newer request from retained history rather than trusting the stale bounded snapshot.
       resetCorrelationRegistryForTests();
       resetDurableForTests();
       initDurableStore(dir);

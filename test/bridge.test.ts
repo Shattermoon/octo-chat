@@ -8,6 +8,7 @@
  */
 
 import http from 'node:http';
+import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
@@ -100,6 +101,7 @@ const { createSession, deleteSession, findSessionByConversation, getSession, ini
   '../src/main/session/store.js'
 );
 const { closeConversation, liveConversations, noteChatOrigin, recordChatObservations, recordProgress, recordToolCall, REQUEST_ID_GRACE_MS, resetRecorderForTests } = await import('../src/main/session/recorder.js');
+const { requestCorrelation } = await import('../src/main/session/correlation.js');
 const { resetBlockedChatsForTests, setChatBlocked } = await import('../src/main/session/blocked-chats.js');
 const {
   CONTINUATIONS_STATE,
@@ -934,6 +936,81 @@ describe('activity feed', () => {
       attribution: 'request_id',
       attributionMethod: 'request_id'
     });
+  });
+
+  it('does not ACK or publish a new request owner before its journal append commits', async () => {
+    await pair();
+    const conversationId = '18181818-4040-6262-8484-969696969696';
+    const requestId = 'wfr-owner-waits-for-disk';
+    const gate = faultGate();
+    const append = fs.appendFile.bind(fs);
+    const spy = vi.spyOn(fs, 'appendFile').mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('request-owners.jsonl')) await gate.hold();
+      return append(...args);
+    });
+    let settled = false;
+    try {
+      const pending = request('POST', '/correlations', {
+        body: { conversationId, calls: [{ requestId, messageId: 'held-owner', tool: 'read', order: 0, answered: false }] }
+      });
+      void pending.finally(() => { settled = true; });
+      await gate.entered;
+      expect(settled).toBe(false);
+      expect(requestCorrelation(requestId)).toBeNull();
+      gate.release();
+      const reply = await pending;
+      expect(reply.status).toBe(200);
+      expect(reply.body).toMatchObject({ confirmed: [requestId], conflicts: [], complete: true });
+      expect(requestCorrelation(requestId)?.conversationId).toBe(conversationId);
+    } finally {
+      gate.release();
+      spy.mockRestore();
+    }
+  });
+
+  it('does not confirm or authorize an owner whose journal append fails', async () => {
+    await pair();
+    const conversationId = '19191919-4141-6363-8585-979797979797';
+    const requestId = 'wfr-owner-disk-failure';
+    const append = fs.appendFile.bind(fs);
+    let failed = false;
+    const spy = vi.spyOn(fs, 'appendFile').mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('request-owners.jsonl')) {
+        if (!failed) {
+          failed = true;
+          throw Object.assign(new Error('injected owner journal failure'), { code: 'EIO' });
+        }
+      }
+      return append(...args);
+    });
+    try {
+      const reply = await request('POST', '/correlations', {
+        body: { conversationId, calls: [{ requestId, messageId: 'failed-owner', tool: 'read', order: 0, answered: false }] }
+      });
+      expect(reply.status).toBe(500);
+      expect(requestCorrelation(requestId)).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('serializes two chats racing a fresh request id and reports the loser as a conflict', async () => {
+    await pair();
+    const requestId = 'wfr-two-chat-first-owner-race';
+    const firstConversation = '20202020-4242-6464-8686-989898989898';
+    const secondConversation = '21212121-4343-6565-8787-999999999999';
+    const call = { requestId, messageId: 'same-request-race', tool: 'read', order: 0, answered: false };
+    const replies = await Promise.all([
+      request('POST', '/correlations', { body: { conversationId: firstConversation, calls: [call] } }),
+      request('POST', '/correlations', { body: { conversationId: secondConversation, calls: [call] } })
+    ]);
+    const winner = replies.find((reply) => reply.body.complete === true)!;
+    const loser = replies.find((reply) => reply.body.complete === false)!;
+    expect(winner).toBeTruthy();
+    expect(loser).toBeTruthy();
+    expect(winner.body).toMatchObject({ confirmed: [requestId], conflicts: [] });
+    expect(loser.body).toMatchObject({ confirmed: [], conflicts: [requestId] });
+    expect(requestCorrelation(requestId)?.conversationId).toBe(winner.body.conversationId);
   });
   it('registers a request id the page could not yet name a tool for', async () => {
     await pair();

@@ -10,7 +10,7 @@ import { getConfig } from '../config.js';
 import { randomUUID } from 'node:crypto';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
-import { getSession, findSessionByConversation, createSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, sessionDirectoryMissing } from './store.js';
+import { getSession, findSessionByConversation, createSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, sessionDirectoryMissing, waitForConversationDeletionSettlement } from './store.js';
 import { assignSessionProject, projectWorkspace, getSessionProject } from '../projects.js';
 import { isChatBlocked } from './blocked-chats.js';
 import { wakeBrowserWork } from '../browser-wake.js';
@@ -938,13 +938,30 @@ export function bindBrowserInputProject(id: string, owner: string, conversationI
     const entry = current.find(row => row.id === id && row.owner === owner);
     if (!entry || !['browser', 'sent'].includes(entry.state) || !entry.projectId || entry.purpose === 'decision') return false;
     if (entry.conversationId && entry.conversationId !== conversationId) return false;
+    // A cold explicit delete can fence the durable owner before its lineage has been loaded into
+    // memory. Project binding is another session-creation ingress, so it must join the same delete
+    // transaction as recorder initialization before treating "not found" as permission to mint a
+    // replacement session.
+    const preparingDelete = waitForConversationDeletionSettlement(conversationId);
+    if (preparingDelete) await preparingDelete;
     if (await conversationWasSuperseded(conversationId)) return false;
     // Fence this claim to one conversation durably before creating its session.
     const bound = { ...entry, conversationId };
     if (!entry.conversationId) await commit(current.map(row => row === entry ? bound : row));
     const heldSessionId = entry.sessionId ?? entry.deliveredSessionId;
-    const session = heldSessionId ? await getSession(heldSessionId) :
-      await findSessionByConversation(conversationId, { requireUnique: true }) ?? await createSession({ conversationId, title: userTitle(entry.text, entry.text), titleSource: 'fallback' });
+    let session = heldSessionId ? await getSession(heldSessionId) :
+      await findSessionByConversation(conversationId, { requireUnique: true });
+    if (!session && !heldSessionId) {
+      // Close the race where deletion starts after the pre-check but before the current-owner
+      // lookup. On rollback, retry the durable owner; on committed deletion, creation is allowed.
+      const deleting = waitForConversationDeletionSettlement(conversationId);
+      if (deleting) {
+        await deleting;
+        if (await conversationWasSuperseded(conversationId)) return false;
+        session = await findSessionByConversation(conversationId, { requireUnique: true });
+      }
+    }
+    session ??= await createSession({ conversationId, title: userTitle(entry.text, entry.text), titleSource: 'fallback' });
     if (!session || session.conversationId !== conversationId) return false;
     await assignSessionProject(session.id, entry.projectId);
     const latest = await load();

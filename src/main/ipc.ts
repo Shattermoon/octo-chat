@@ -907,17 +907,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   handle('sessions:delete', async (payload) => {
     const { id } = sessionIdArg.parse(payload);
-    // Detach first. The recorder maps live ChatGPT conversations to session ids, so
-    // deleting the folder underneath a live one left it appending to a session that no
-    // longer existed — the events went to a resurrected half-session with no summary.
-    // Forgetting the mapping makes the next observation open a fresh session instead.
-    const detached = forgetSession(id);
-    // Release first. The block button lives on this row, so a block left behind by the row's
-    // deletion would refuse that conversation's tools with nothing left in the app that could
-    // ever release it.
+    // The store's same-directory tombstone rename is the delete commit point. Keep recorder
+    // attachment and block state intact until that commit succeeds: if rename fails, the
+    // canonical session is still valid and detaching first would let the next observation fork
+    // a duplicate recording epoch.
     const summary = await getSession(id);
-    if (summary?.conversationId) setChatBlocked(summary.conversationId, false);
     await deleteSession(id);
+    const detached = forgetSession(id);
+    // Once the row is durably retired there is no UI left from which to release its block.
+    if (summary?.conversationId) setChatBlocked(summary.conversationId, false);
     logInfo(
       detached.length > 0
         ? `session ${id} deleted; ${detached.length} live conversation(s) will start a new session`

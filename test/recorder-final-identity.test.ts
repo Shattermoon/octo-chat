@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { defaultConfig, initConfigPath, saveConfig } from '../src/main/config.js';
 import { closeConversation, liveConversations, recordChatObservations, recordToolCall, resetRecorderForTests } from '../src/main/session/recorder.js';
 import { emptyEvidence, trackInFlight } from '../src/main/mcp/call-context.js';
+import { initDurableStore, resetDurableForTests } from '../src/main/durable.js';
 import { appendEvent, flushSessions, getSession, initSessionStore, readEvents, resetSessionStoreForTests } from '../src/main/session/store.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
@@ -21,10 +22,11 @@ beforeAll(async () => {
   directory = await makeTempDir('clf-final-identity-');
   initConfigPath(directory);
   initSessionStore(directory);
+  initDurableStore(directory);
   await saveConfig(defaultConfig());
 });
 beforeEach(() => { resetRecorderForTests(); resetSessionStoreForTests(); });
-afterAll(async () => { resetRecorderForTests(); resetSessionStoreForTests(); await removeTempDir(directory); });
+afterAll(async () => { resetRecorderForTests(); resetSessionStoreForTests(); resetDurableForTests(); await removeTempDir(directory); });
 
 it.each([false, true])('records stopped partial-answer revisions without restoring activity (restart=%s)', async restart => {
   const conversationId = `stopped-partial-${restart}`;

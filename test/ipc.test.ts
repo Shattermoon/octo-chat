@@ -1129,6 +1129,40 @@ describe('session IPC contracts', () => {
     expect(isChatBlocked(conversationId)).toBe(false);
   });
 
+  it('keeps recorder attachment and block state when the atomic session delete cannot commit', async () => {
+    const { isChatBlocked, resetBlockedChatsForTests } = await import('../src/main/session/blocked-chats.js');
+    const { liveConversations, sessionForConversation } = await import('../src/main/session/recorder.js');
+    const { getSession } = await import('../src/main/session/store.js');
+    resetBlockedChatsForTests();
+    const conversationId = 'dddddddd-1111-2222-3333-444444444444';
+    const sessionId = await sessionForConversation(conversationId);
+    expect(sessionId).toBeTruthy();
+    await handlers.get('sessions:block')!(null, { id: sessionId, blocked: true });
+    expect(isChatBlocked(conversationId)).toBe(true);
+
+    const realRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(from).endsWith(`${path.sep}${sessionId}`) && path.basename(String(to)).startsWith(`.deleted-${sessionId}-`)) {
+        throw Object.assign(new Error('injected tombstone rename failure'), { code: 'EBUSY' });
+      }
+      return realRename(from, to);
+    });
+    try {
+      const failed = (await handlers.get('sessions:delete')!(null, { id: sessionId })) as any;
+      expect(failed.ok).toBe(false);
+      expect(isChatBlocked(conversationId)).toBe(true);
+      expect(liveConversations()).toContainEqual(expect.objectContaining({ conversationId, sessionId }));
+      expect(await getSession(sessionId!)).not.toBeNull();
+    } finally {
+      rename.mockRestore();
+    }
+
+    const deleted = (await handlers.get('sessions:delete')!(null, { id: sessionId })) as any;
+    expect(deleted.ok, deleted.error).toBe(true);
+    expect(isChatBlocked(conversationId)).toBe(false);
+    expect(liveConversations().some((entry) => entry.conversationId === conversationId)).toBe(false);
+  });
+
   it('reports the blocked set with every session list, so one paint marks every row', async () => {
     const { resetBlockedChatsForTests } = await import('../src/main/session/blocked-chats.js');
     resetBlockedChatsForTests();

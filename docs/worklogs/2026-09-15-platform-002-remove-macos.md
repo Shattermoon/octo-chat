@@ -1,6 +1,6 @@
 # PLATFORM-002 — remove macOS runtime and product support
 
-**State:** REVIEW
+**State:** DONE
 **Audit ID:** PLATFORM-002
 **Branch:** `feat/platform-002-remove-macos`
 **Base:** `b81019cbe6504e8e5ef5243b58f3150049c546d1`
@@ -77,3 +77,15 @@ Hosted CI on review head `72e662a2ea255466998b26d39935ee260523faa6` exposed one 
 CodeRabbit formal review `5208939897` was submitted against superseded head `523d4d84e8a0f7a835bbd0dfc58a9eec5ebad96a` with five actionable comments. Each was rechecked against current code rather than accepted mechanically. The PLATFORM-002 `ACTIVE`/`REVIEW` mismatch was already fixed in `72e662a`. Browser discovery, fresh-config capability projection and updater staging already failed closed on Darwin; their comments identified valid missing negative regressions, so explicit Darwin assertions were added. Tunnel discovery was a valid runtime finding: `commonBinaryDirsForPlatform('darwin')` still returned home-directory candidates and `locateBinary` could also accept a hint, bundled binary or PATH entry. The repair is intentionally stronger than the narrow comment: unsupported platforms now return `null` before any tunnel executable candidate is considered, and common-directory discovery also returns an empty list. Focused browser/config/tunnel/update/packaging/platform/computer-generation validation passes 183 tests with one host-dependent skip; typecheck and `git diff --check` pass. The generic static-analysis warning about the internally generated Desktop helper script path does not represent request-controlled traversal and required no production change.
 
 Hosted Windows verification on exact head `2a166f62180d3838493cec0df4a74f130d2ef662` later exposed a separate aggregate-suite timing failure in `test/bridge.test.ts`: the three-worker bootstrap regression waited for three browser opens with `vi.waitFor`'s short wall-clock polling budget while each open is intentionally downstream of a serialized `writeDurableNow` command-lease transition. The exact test and its seven-test worker-bootstrap group passed in isolation, an earlier hosted Windows run had passed the same production path, and the full current bridge file passed once rerun locally. The test now waits on the real transaction boundary with `flushDurable()` before asserting the three opens; no production worker/bootstrap timeout, browser grace period or delivery semantics changed. The seven worker-bootstrap tests pass, the full bridge suite passes 383/383, and typecheck plus `git diff --check` remain green. A fresh exact-head Windows/Linux hosted run is still required before merge.
+
+## Merge and post-merge evidence
+
+- Final reviewed branch head: `faf4a3ff3699a847397ea6f1ca12c7f4924ae4ba`.
+- Exact-head hosted CI run `34962158338` passed Linux x64 and Windows x64, including the published-plugin exercise on both supported hosts. The first Windows plugin attempt hit transient Fetch startup latency plus a Blender temp-directory handle race; a failed-job rerun on the identical SHA passed without product/test changes.
+- Three independent exact-head reviewers passed the final `2a166f6..faf4a3f` delta and confirmed it was test/worklog-only; prior Windows/security, Linux/platform and packaging/provenance reviews covered the executable head.
+- CodeRabbit formal review `5208939897`, submitted against superseded head `523d4d84`, was dismissed only after every actionable finding had been revalidated/resolved and current hosted CI was green.
+- PR #9 was squash-merged to `main` as `47117219b2a478b884f5369666911be202d4bdac` on 2026-09-15.
+- Post-merge scan found no tracked macOS helper/addon/Desktop registrar/package-seal/smoke path and no `darwin`/`macOS`/`macos` executable references under `src`, `scripts`, GitHub workflows, package config or builder config. Remaining Darwin/macOS strings are historical/support-policy text or third-party source/license metadata.
+- Post-merge `main` validation passed `npm run typecheck`, focused platform/package/browser/config/tunnel/update/feature/connection regressions (180 passed, 1 host-dependent skip), and `npm run verify:notices` (93 production packages, 7 catalog entries, 730 pinned native source archives/patches).
+
+PLATFORM-002 is complete. Windows and Linux are the only supported runtime/release families, and native Desktop remains Windows-only.
