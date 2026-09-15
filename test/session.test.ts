@@ -54,6 +54,7 @@ import {
   resetSessionStoreForTests,
   rewriteUnattributedToolCalls,
   saveHandoff,
+  sessionDirectoryMissing,
   sessionsRoot,
   unsetSessionRootForTests,
   upsertMessageEvent,
@@ -1363,6 +1364,77 @@ describe('session store', () => {
       userMessages: 1,
       lastHandoffId: handoffId
     });
+  });
+
+  it('does not let paused reconstruction resurrect a session after deletion', async () => {
+    const summary = await createSession({ title: 'delete reconstruction race', conversationId: 'delete-race-chat' });
+    await appendEvent(summary.id, {
+      time: 50,
+      source: 'extension',
+      kind: 'user_message',
+      message: { text: 'durable before delete', truncated: false, chars: 21 }
+    });
+
+    // Simulate a restart before the debounced metadata projection catches up. Reopening now has
+    // to rebuild from the durable journal and will eventually try to repair meta.json.
+    resetSessionStoreForTests();
+    const sessionPath = path.join(sessionsRoot(), summary.id);
+    const realMkdir = fs.mkdir.bind(fs);
+    const realRm = fs.rm.bind(fs);
+    let releaseReconstruction!: () => void;
+    const reconstructionGate = new Promise<void>((resolve) => { releaseReconstruction = resolve; });
+    let reachedRepair!: () => void;
+    const repairPaused = new Promise<void>((resolve) => { reachedRepair = resolve; });
+    let removedOnce!: () => void;
+    const firstRemoval = new Promise<void>((resolve) => { removedOnce = resolve; });
+    let paused = false;
+    let removalObserved = false;
+
+    const mkdirSpy = vi.spyOn(fs, 'mkdir').mockImplementation(
+      (async (target: Parameters<typeof fs.mkdir>[0], ...args: unknown[]) => {
+        if (!paused && String(target) === sessionPath) {
+          paused = true;
+          reachedRepair();
+          await reconstructionGate;
+        }
+        return (realMkdir as (...callArgs: unknown[]) => ReturnType<typeof fs.mkdir>)(target, ...args);
+      }) as typeof fs.mkdir
+    );
+    const rmSpy = vi.spyOn(fs, 'rm').mockImplementation(
+      (async (target: Parameters<typeof fs.rm>[0], ...args: unknown[]) => {
+        const result = await (realRm as (...callArgs: unknown[]) => ReturnType<typeof fs.rm>)(target, ...args);
+        if (!removalObserved && String(target) === sessionPath) {
+          removalObserved = true;
+          removedOnce();
+        }
+        return result;
+      }) as typeof fs.rm
+    );
+
+    const reconstruction = appendEvent(summary.id, {
+      time: 51,
+      source: 'app',
+      kind: 'note',
+      message: { text: 'stale reconstruction', truncated: false, chars: 20 }
+    });
+    let deletion: Promise<void> | null = null;
+    try {
+      await repairPaused;
+      deletion = deleteSession(summary.id);
+      await firstRemoval;
+      releaseReconstruction();
+      await Promise.allSettled([reconstruction, deletion]);
+
+      expect(await sessionDirectoryMissing(summary.id)).toBe(true);
+      expect((await listSessions()).some((session) => session.id === summary.id)).toBe(false);
+      expect(await getSession(summary.id)).toBeNull();
+    } finally {
+      releaseReconstruction();
+      await Promise.allSettled([reconstruction, ...(deletion ? [deletion] : [])]);
+      rmSpy.mockRestore();
+      mkdirSpy.mockRestore();
+      await deleteSession(summary.id).catch(() => undefined);
+    }
   });
 
   const toolCall = (callId: string, tool: string, outcome: string, metric: string | undefined, seq: number) => ({

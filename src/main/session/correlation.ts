@@ -32,24 +32,35 @@ export interface RequestCorrelation {
   conversationId: string;
   /** Durable local session epoch that owned this request when the page first proved it. */
   sessionId: string;
+  /** Recent observation detail only. It is not part of the permanent ownership verdict. */
   messageId: string;
+  /** Recent observation detail only. It is not part of the permanent ownership verdict. */
   tool: string;
+  /** Recent observation detail only. It is not part of the permanent ownership verdict. */
   observedAt: number;
 }
 
-const MAX_CORRELATIONS = 50_000;
+export type RequestCorrelationOwner = Pick<RequestCorrelation, 'requestId' | 'conversationId' | 'sessionId'>;
+
+/** Diagnostic observations may be bounded; exact ownership may not. */
+const MAX_CORRELATION_DIAGNOSTICS = 50_000;
 const CORRELATIONS_STATE = 'request-correlations';
 /**
- * 5 stores owners and nothing else, because an owner is now the only verdict there is.
+ * 6 stores only the permanent owner facts. Observation labels/timestamps are process-local
+ * diagnostics and may be discarded under pressure without changing an ownership decision.
  *
  * Versions 3 and 4 wrapped each row in a sticky `conflicted` flag, so a row could exist purely
  * to record that its id was unusable. Those rows say nothing this registry can act on any more:
  * read the owner out of the wrapper when one is there, and let a forgotten id be proved again
  * by exact evidence or by the recorded history reconciled below.
+ * Version 5 stored the complete observation row and bounded the same map to 50,000 entries. That
+ * made a security fact disappear when diagnostic pressure filled the registry. Version 6 keeps
+ * the owner index unbounded until a lifecycle-proven reclamation rule exists.
  */
-const CORRELATIONS_STATE_VERSION = 5;
+const CORRELATIONS_STATE_VERSION = 6;
 
-const byRequest = new Map<string, RequestCorrelation>();
+const ownersByRequest = new Map<string, RequestCorrelationOwner>();
+const diagnosticsByRequest = new Map<string, Pick<RequestCorrelation, 'messageId' | 'tool' | 'observedAt'>>();
 const waiters = new Map<string, Set<() => void>>();
 /**
  * Evidence grace belongs to the request, not each tool call in its workflow. All callers
@@ -66,7 +77,10 @@ let restoring: Promise<void> | null = null;
 
 interface PersistedCorrelations {
   version: number;
-  entries: RequestCorrelation[];
+  /** v6+ permanent facts. */
+  owners?: RequestCorrelationOwner[];
+  /** v3-v5 legacy observations/wrappers. */
+  entries?: unknown[];
 }
 
 function wake(requestId: string): void {
@@ -76,19 +90,24 @@ function wake(requestId: string): void {
   for (const resolve of held) resolve();
 }
 
-function trim(): void {
-  while (byRequest.size > MAX_CORRELATIONS) {
-    const first = byRequest.keys().next().value as string | undefined;
-    if (!first) break;
-    byRequest.delete(first);
-    wake(first);
+function rememberDiagnostic(input: RequestCorrelation): void {
+  diagnosticsByRequest.delete(input.requestId);
+  diagnosticsByRequest.set(input.requestId, {
+    messageId: input.messageId,
+    tool: input.tool,
+    observedAt: input.observedAt
+  });
+  while (diagnosticsByRequest.size > MAX_CORRELATION_DIAGNOSTICS) {
+    const oldest = diagnosticsByRequest.keys().next().value as string | undefined;
+    if (!oldest) break;
+    diagnosticsByRequest.delete(oldest);
   }
 }
 
 function snapshot(): PersistedCorrelations {
   return {
     version: CORRELATIONS_STATE_VERSION,
-    entries: [...byRequest.values()].map((owner) => ({ ...owner }))
+    owners: [...ownersByRequest.values()].map((owner) => ({ ...owner }))
   };
 }
 
@@ -97,32 +116,16 @@ function persist(): void {
 }
 
 /**
- * Whether a persisted row still carries everything an owner needs to be restored.
- *
- * The bar is exactly what this registry answers with: a request id, the conversation that
- * proved it, the session epoch that owned it, and when. `tool` is a diagnostic label, kept so
- * a stored row can be read by a human; no caller reads it, and the header above says why it
- * could not be evidence even if one did. Demanding a nonempty one here was therefore a bar the
- * registry itself does not have - and it silently deleted the rows that need restoring most.
- *
- * A request id is published on `message.metadata.request_id` before the `api_tool` message
- * naming the tool exists, so the page proves ownership first and names the tool later. Those
- * early sightings are stored with an empty tool on purpose - the join does not use the name,
- * and waiting for it is what used to file the call under Unattributed activity. Every one of
- * them then failed this check on the next launch, so a workflow whose calls were still arriving
- * lost its proven owner to a restart: the same permanence bug the header describes, arriving
- * through the door marked valid.
+ * Whether a persisted row still carries the complete permanent ownership fact.
+ * Diagnostic message/tool/time detail is intentionally absent from this validity boundary.
  */
-function validCorrelation(value: unknown): value is RequestCorrelation {
+function validOwner(value: unknown): value is RequestCorrelationOwner {
   if (!value || typeof value !== 'object') return false;
-  const item = value as Partial<RequestCorrelation>;
+  const item = value as Partial<RequestCorrelationOwner>;
   return (
     typeof item.requestId === 'string' && item.requestId.length > 0 && item.requestId.length <= 200 &&
     typeof item.conversationId === 'string' && item.conversationId.length > 0 && item.conversationId.length <= 200 &&
-    typeof item.sessionId === 'string' && /^[0-9a-z-]{8,64}$/i.test(item.sessionId) &&
-    typeof item.messageId === 'string' && item.messageId.length > 0 && item.messageId.length <= 300 &&
-    typeof item.tool === 'string' && item.tool.length <= 100 &&
-    typeof item.observedAt === 'number' && Number.isFinite(item.observedAt)
+    typeof item.sessionId === 'string' && /^[0-9a-z-]{8,64}$/i.test(item.sessionId)
   );
 }
 
@@ -130,13 +133,19 @@ function validCorrelation(value: unknown): value is RequestCorrelation {
  * The owner in a persisted row, whatever shape the version that wrote it used.
  *
  * Versions 3 and 4 wrapped it as `{ requestId, value, conflicted }`, where a row with no value
- * was a sticky contradiction. Version 5 stores the owner itself. A wrapper with no usable value
- * carries no owner and is simply dropped, which is all that forgetting an old conflict takes.
+ * was a sticky contradiction. Version 5 stores the complete observation row directly. A wrapper
+ * with no usable value carries no owner and is simply dropped, which is all that forgetting an
+ * old conflict takes.
  */
-function storedOwner(raw: unknown): RequestCorrelation | null {
+function storedOwner(raw: unknown): RequestCorrelationOwner | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = 'value' in (raw as Record<string, unknown>) ? (raw as { value: unknown }).value : raw;
-  return validCorrelation(value) ? { ...value } : null;
+  if (!validOwner(value)) return null;
+  return {
+    requestId: value.requestId,
+    conversationId: value.conversationId,
+    sessionId: value.sessionId
+  };
 }
 
 /**
@@ -151,12 +160,15 @@ function storedOwner(raw: unknown): RequestCorrelation | null {
  * conversation id, and re-observing the request from that stale page must not drag an in-flight
  * request into the newer epoch.
  */
-function merge(input: RequestCorrelation): 'stored' | 'same' | 'refused' {
-  const previous = byRequest.get(input.requestId);
+function merge(input: RequestCorrelationOwner): 'stored' | 'same' | 'refused' {
+  const previous = ownersByRequest.get(input.requestId);
   if (!previous) {
-    byRequest.set(input.requestId, { ...input });
+    ownersByRequest.set(input.requestId, {
+      requestId: input.requestId,
+      conversationId: input.conversationId,
+      sessionId: input.sessionId
+    });
     evidenceWindowStarts.delete(input.requestId);
-    trim();
     wake(input.requestId);
     return 'stored';
   }
@@ -164,15 +176,6 @@ function merge(input: RequestCorrelation): 'stored' | 'same' | 'refused' {
   // Refused, and nothing else: the entry does not change and no waiter is woken, because a
   // claim this registry does not believe is not an answer for anybody waiting on the id.
   if (previous.conversationId !== input.conversationId) return 'refused';
-
-  if (input.observedAt > previous.observedAt) {
-    previous.observedAt = input.observedAt;
-    // trim() uses insertion order as the bounded registry's freshness order. Updating the
-    // timestamp without moving this key left a live, repeatedly observed old request at the
-    // eviction head, so enough newer ids could discard it while genuinely stale ids stayed.
-    byRequest.delete(input.requestId);
-    byRequest.set(input.requestId, previous);
-  }
   return 'same';
 }
 
@@ -200,14 +203,14 @@ async function restoreRequestCorrelationsOnce(): Promise<void> {
 
   const saved = await readDurable<PersistedCorrelations>(CORRELATIONS_STATE);
   let loaded = false;
-  if (saved && saved.version >= 3 && saved.version <= CORRELATIONS_STATE_VERSION && Array.isArray(saved.entries)) {
-    for (const raw of saved.entries.slice(-MAX_CORRELATIONS)) {
+  if (saved && saved.version >= 3 && saved.version <= CORRELATIONS_STATE_VERSION) {
+    const rows = saved.version >= 6 ? saved.owners : saved.entries;
+    if (Array.isArray(rows)) for (const raw of rows) {
       const owner = storedOwner(raw);
       if (!owner) continue;
       merge(owner);
       loaded = true;
     }
-    trim();
   }
 
   // The durable index is a debounced snapshot, while attributed tool-call JSONL is appended
@@ -244,17 +247,14 @@ async function restoreRequestCorrelationsOnce(): Promise<void> {
       merge({
         requestId: call.requestId,
         conversationId: call.conversationId,
-        sessionId: session.id,
-        messageId: `stored:${call.callId}`,
-        tool: call.tool,
-        observedAt: event.time
+        sessionId: session.id
       });
     }
   }
   // Also when the snapshot on disk is an older version that held nothing usable: rewriting it
   // is what actually removes its conflict rows, and leaving them there would make every
   // later launch re-read a verdict this registry no longer has.
-  if (byRequest.size > 0 || loaded || (saved?.version ?? CORRELATIONS_STATE_VERSION) !== CORRELATIONS_STATE_VERSION) persist();
+  if (ownersByRequest.size > 0 || loaded || (saved?.version ?? CORRELATIONS_STATE_VERSION) !== CORRELATIONS_STATE_VERSION) persist();
 }
 
 /**
@@ -281,14 +281,9 @@ export function observeRequestCorrelations(
 ): Array<'stored' | 'same' | 'refused'> {
   let changed = false;
   const results = inputs.map((input) => {
-    const previousObservedAt = byRequest.get(input.requestId)?.observedAt;
     const result = merge(input);
-    // A same-owner observation can still advance durable freshness/order. Persist that too so
-    // an app restart cannot resurrect the pre-refresh eviction order. A refusal changes nothing
-    // and therefore writes nothing.
-    if (result === 'stored' || (result === 'same' && previousObservedAt !== undefined && input.observedAt > previousObservedAt)) {
-      changed = true;
-    }
+    if (result !== 'refused') rememberDiagnostic(input);
+    if (result === 'stored') changed = true;
     return result;
   });
   if (changed) persist();
@@ -296,9 +291,9 @@ export function observeRequestCorrelations(
 }
 
 /** Exact request-id lookup. An id no page has proved yet resolves to null. */
-export function requestCorrelation(requestId: string | null | undefined): RequestCorrelation | null {
+export function requestCorrelation(requestId: string | null | undefined): RequestCorrelationOwner | null {
   if (!requestId) return null;
-  const held = byRequest.get(requestId);
+  const held = ownersByRequest.get(requestId);
   return held ? { ...held } : null;
 }
 
@@ -306,7 +301,7 @@ export function requestCorrelation(requestId: string | null | undefined): Reques
  * Waits only for this exact id. Late Fiber evidence is allowed; no other request or page
  * state can wake this into a successful ownership decision.
  */
-export async function awaitRequestCorrelation(requestId: string | null | undefined, timeoutMs: number): Promise<RequestCorrelation | null> {
+export async function awaitRequestCorrelation(requestId: string | null | undefined, timeoutMs: number): Promise<RequestCorrelationOwner | null> {
   if (!requestId) return null;
   const immediate = requestCorrelation(requestId);
   if (immediate || timeoutMs <= 0) return immediate;
@@ -340,7 +335,8 @@ export async function awaitRequestCorrelation(requestId: string | null | undefin
 
 /** A conversation being closed cannot invalidate an already issued request. */
 export function resetCorrelationRegistryForTests(): void {
-  byRequest.clear();
+  ownersByRequest.clear();
+  diagnosticsByRequest.clear();
   evidenceWindowStarts.clear();
   restored = false;
   restoring = null;

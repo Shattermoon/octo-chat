@@ -244,7 +244,7 @@ Paths in this section are repository-relative. Most mechanisms have `main`, `sha
 | --- | --- | --- |
 | Permissions and settings | `config.ts` / `config.json` | Validate every load/save; enforce effective current capabilities at use. |
 | Credentials | `secrets.ts` / encrypted `secrets.bin`; plugin OAuth's encrypted installation store | Main process only; publish updated cache after the encrypted write. |
-| Session/current chat/project | `store.ts` / `sessions/<id>/meta.json` | Rebind is the semantic A→B commit. |
+| Session/current chat/project | `store.ts` / `sessions/<id>/meta.json` | Rebind is the semantic A→B commit. Delete publishes a process-lifetime terminal tombstone before draining reconstruction; stale recovery cannot write or publish the deleted id. |
 | Exact request ownership | `correlation.ts` / `state/request-correlations.json` plus recorded proof | First exact proof wins; retain local session epoch; reconcile from history on startup. |
 | Authored message | `store.ts` / canonical message shard | Replace by stable identity, preserving origin chronology. |
 | Agent progress plan | `store.ts::updateSessionPlan` / `sessions/<id>/plan.json` | Exact caller/session and invocation ordering; atomically replace the whole plan. |
@@ -440,9 +440,11 @@ historical Fiber object, conflicting durable ids, active tab, timing, tool name,
 or “only generating chat” is never a replacement proof.
 
 `correlation.ts` keeps the first exact request owner and its **local session epoch**. Conflicting
-claims do not overwrite it. Proof has no time TTL but the index is bounded to 50,000 recently
-observed request ids; recorded exact calls reconcile the index on startup even when a snapshot
-already exists. Late proof can repair Unattributed history only to the proved historical owner.
+claims do not overwrite it. Proof has no time TTL and the permanent owner index is not evicted by
+diagnostic pressure; only recent message/tool/time observation detail is bounded to 50,000 ids.
+Durable v6 state stores owner facts without that diagnostic detail, and recorded exact calls still
+reconcile the index on startup even when a snapshot already exists. Late proof can repair
+Unattributed history only to the proved historical owner.
 
 Unresolved requests with an id get the recorder's 20-second production evidence grace. A
 headerless call has no exact proof to await and lands Unattributed immediately. Evidence waits

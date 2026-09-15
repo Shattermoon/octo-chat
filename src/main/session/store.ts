@@ -108,6 +108,16 @@ let attachmentCatalogLoading: Promise<AttachmentCatalog> | null = null;
  */
 let attachmentEpoch = 0;
 const MAX_MISSING_CONVERSATION_CACHE = 1024;
+/**
+ * Process-lifetime terminal delete facts.
+ *
+ * Session ids are never reused. Once deletion begins, work that captured the old directory may
+ * finish its reads but may not publish files, an `open` entry or a catalog row again. A restart
+ * needs no persisted tombstone: no old promise survives the process and the deleted directory is
+ * the durable fact. Failed deletion clears its tombstone so a later explicit retry can recover.
+ */
+const deletedSessions = new Set<string>();
+const deletingSessions = new Map<string, Promise<void>>();
 
 function rememberMissingCurrentConversation(conversationId: string): void {
   missingCurrentConversations.add(conversationId);
@@ -124,6 +134,8 @@ export function initSessionStore(userDataDir: string): void {
   attachmentCatalog = null;
   attachmentCatalogLoading = null;
   attachmentEpoch = 0;
+  deletedSessions.clear();
+  deletingSessions.clear();
 }
 
 export function sessionsRoot(): string {
@@ -154,6 +166,14 @@ function sessionDir(id: string): string {
 /** Ids are generated here and never taken from a caller, so this is a sanity check. */
 function assertSessionId(id: string): void {
   if (!/^[0-9a-z-]{8,64}$/i.test(id)) throw new Error('Invalid session id');
+}
+
+function sessionDeleted(id: string): boolean {
+  return deletedSessions.has(id);
+}
+
+function assertSessionNotDeleted(id: string): void {
+  if (sessionDeleted(id)) throw new Error(`Session ${id} was deleted`);
 }
 
 // ------------------------------------------------------------------ state
@@ -286,14 +306,17 @@ function emptySummary(id: string, title: string, conversationId: string | null):
  * ordering is what makes the compaction rebind safe to fail: see rebindSession.
  */
 async function writeSummary(summary: SessionSummary, historySeq: number): Promise<void> {
+  assertSessionNotDeleted(summary.id);
   const dir = sessionDir(summary.id);
   const target = path.join(dir, 'meta.json');
   const backup = path.join(dir, 'meta.backup.json');
   const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
   const persisted: PersistedSummary = { ...summary, [META_HISTORY_SEQ]: historySeq, [META_CANONICAL_PROJECTION]: 1, [META_TOKEN_ESTIMATE]: 1 };
   await fs.mkdir(dir, { recursive: true });
+  assertSessionNotDeleted(summary.id);
   try {
     await fs.writeFile(tmp, JSON.stringify(persisted, null, 2), 'utf8');
+    assertSessionNotDeleted(summary.id);
     // Preserve the last validated checkpoint. Never copy arbitrary corrupt bytes over the
     // backup: parse/id validation is what makes this a recovery source rather than a second
     // name for the same damage.
@@ -303,6 +326,7 @@ async function writeSummary(summary: SessionSummary, historySeq: number): Promis
         const backupTmp = `${backup}.${process.pid}.${randomUUID()}.tmp`;
         try {
           await fs.writeFile(backupTmp, JSON.stringify(current, null, 2), 'utf8');
+          assertSessionNotDeleted(summary.id);
           await fs.rename(backupTmp, backup);
         } finally {
           await fs.rm(backupTmp, { force: true }).catch(() => undefined);
@@ -311,6 +335,7 @@ async function writeSummary(summary: SessionSummary, historySeq: number): Promis
     } catch {
       // First write, or an already damaged primary. Keep any existing valid backup.
     }
+    assertSessionNotDeleted(summary.id);
     await fs.rename(tmp, target);
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => undefined);
@@ -727,16 +752,24 @@ async function rebuildSummaryFromHistory(
  */
 async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot | null> {
   assertSessionId(id);
+  if (sessionDeleted(id)) return null;
   const existing = reconciling.get(id);
-  if (existing) return existing;
+  if (existing) {
+    const snapshot = await existing;
+    return sessionDeleted(id) ? null : snapshot;
+  }
   const work = (async () => {
+    if (sessionDeleted(id)) return null;
     let aliasesCollapsed = false;
     const messages = await readCanonicalMessages(id, () => { aliasesCollapsed = true; });
+    if (sessionDeleted(id)) return null;
     let messageSeq = 0;
     for (const event of messages.values()) messageSeq = Math.max(messageSeq, event.seq);
     const journalSeq = await lastSeqOnDisk(id);
+    if (sessionDeleted(id)) return null;
     const historySeq = Math.max(journalSeq, messageSeq);
     const checkpoint = await readMetaCheckpoint(id);
+    if (sessionDeleted(id)) return null;
     const titleRepaired = checkpoint ? refreshUserTitle(checkpoint.summary, messages.values()) : false;
 
     // A pre-taxonomy checkpoint can have a current watermark but stale outcome classification.
@@ -752,6 +785,7 @@ async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot |
       // every launch rereads all old transcripts that happened to contain no aliases.
       const migrated = !checkpoint.canonicalProjectionCurrent || titleRepaired;
       if (migrated) await writeSummary(checkpoint.summary, historySeq);
+      if (sessionDeleted(id)) return null;
       return { summary: checkpoint.summary, messages, historySeq, reconciled: migrated };
     }
     if (checkpoint && historySeq === 0) {
@@ -766,11 +800,13 @@ async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot |
         finishTurn: null
       };
       await writeSummary(summary, 0);
+      if (sessionDeleted(id)) return null;
       return { summary, messages, historySeq: 0, reconciled: true };
     }
     if (!checkpoint && historySeq === 0) return null;
 
     const summary = await rebuildSummaryFromHistory(id, messages, checkpoint?.summary ?? null, historySeq, checkpoint?.historySeq === historySeq, !!checkpoint && !checkpoint.tokenEstimateCurrent);
+    if (sessionDeleted(id)) return null;
     return { summary, messages, historySeq, reconciled: true };
   })();
   reconciling.set(id, work);
@@ -782,12 +818,16 @@ async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot |
 }
 
 async function readAuthoritativeSummary(id: string): Promise<SessionSummary | null> {
+  if (sessionDeleted(id)) return null;
   const live = open.get(id);
   if (live) return live.summary;
   const becomingLive = opening.get(id);
-  if (becomingLive) return (await becomingLive).summary;
+  if (becomingLive) {
+    const entry = await becomingLive;
+    return sessionDeleted(id) ? null : entry.summary;
+  }
   const snapshot = await readDurableSnapshot(id);
-  if (!snapshot) return null;
+  if (!snapshot || sessionDeleted(id)) return null;
   // If a process-lifetime catalog already exists, or one is concurrently being built and may
   // already have passed this row, invalidate/update it after a recovery write. The catalog's own
   // build calls readDurableSnapshot directly, so its normal stale-row repairs do not self-loop.
@@ -799,14 +839,22 @@ async function readAuthoritativeSummary(id: string): Promise<SessionSummary | nu
 
 async function ensureOpen(id: string): Promise<OpenSession> {
   assertSessionId(id);
+  assertSessionNotDeleted(id);
   const existing = open.get(id);
   if (existing) return existing;
   const inFlight = opening.get(id);
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    const entry = await inFlight;
+    assertSessionNotDeleted(id);
+    return entry;
+  }
   const reconstruction = (async () => {
+    assertSessionNotDeleted(id);
     await sealTornTail(id);
+    assertSessionNotDeleted(id);
     const snapshot = await readDurableSnapshot(id);
     if (!snapshot) throw new Error(`Session ${id} has no recoverable metadata or history`);
+    assertSessionNotDeleted(id);
     const entry: OpenSession = {
       summary: snapshot.summary,
       nextSeq: snapshot.historySeq + 1,
@@ -819,6 +867,7 @@ async function ensureOpen(id: string): Promise<OpenSession> {
       metaDirty: false,
       metaTimer: null
     };
+    assertSessionNotDeleted(id);
     open.set(id, entry);
     if (snapshot.reconciled && (attachmentCatalog || attachmentCatalogLoading)) {
       publishAttachmentSummary(entry.summary);
@@ -1610,10 +1659,17 @@ export async function rewriteUnattributedToolCalls(
     // the empty check and deletion share the same queue operation as concurrent-row capture.
     if (deleteEmpty && retainedCalls.length === 0 && entry.queue === settled) {
       if (entry.metaTimer) clearTimeout(entry.metaTimer);
-      await fs.rm(sessionDir(sessionId), { recursive: true, force: true });
-      if (open.get(sessionId) === entry) open.delete(sessionId);
-      invalidateAssetUsage(sessionId);
-      publishAttachmentRemoval(sessionId);
+      deletedSessions.add(sessionId);
+      attachmentEpoch += 1;
+      try {
+        await fs.rm(sessionDir(sessionId), { recursive: true, force: true });
+        if (open.get(sessionId) === entry) open.delete(sessionId);
+        invalidateAssetUsage(sessionId);
+        publishAttachmentRemoval(sessionId);
+      } catch (error) {
+        deletedSessions.delete(sessionId);
+        throw error;
+      }
       return { retained: 0, deleted: true };
     }
     const kept: SessionEvent[] = [start, ...retainedCalls.map((event, index) => ({ ...event, seq: index + 2 }))];
@@ -1790,6 +1846,7 @@ async function readMeta(id: string): Promise<SessionSummary | null> {
  * full recovery path. No guessed summary is allowed to suppress crash reconciliation.
  */
 async function readCatalogSummary(id: string): Promise<SessionSummary | null> {
+  if (sessionDeleted(id)) return null;
   const dir = sessionDir(id);
   try {
     const metadata = await fs.stat(path.join(dir, 'meta.json'));
@@ -1800,7 +1857,9 @@ async function readCatalogSummary(id: string): Promise<SessionSummary | null> {
         try { return (await fs.stat(path.join(dir, name))).mtimeMs; }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw error; }
       }));
-      if (metadata.mtimeMs > 0 && mutations.every(at => at < metadata.mtimeMs)) return checkpoint.summary;
+      if (metadata.mtimeMs > 0 && mutations.every(at => at < metadata.mtimeMs)) {
+        return sessionDeleted(id) ? null : checkpoint.summary;
+      }
     }
   } catch { /* Existing full reconstruction owns missing/corrupt/uncertain checkpoints. */ }
   return (await readDurableSnapshot(id))?.summary ?? null;
@@ -1849,6 +1908,7 @@ function insertSummaryOrder(catalog: AttachmentCatalog, summary: SessionSummary)
 
 /** Refreshes only the summary projection; attachment ownership is unchanged. */
 function publishCachedSummary(summary: SessionSummary, reorder: boolean): void {
+  if (sessionDeleted(summary.id)) return;
   const catalog = attachmentCatalog;
   if (!catalog) return;
   const clone = { ...summary, chatIds: [...summary.chatIds], agents: [...summary.agents] };
@@ -1861,6 +1921,7 @@ function publishCachedSummary(summary: SessionSummary, reorder: boolean): void {
 
 /** Update the derived index only after an attachment mutation is durable. */
 function publishAttachmentSummary(summary: SessionSummary): void {
+  if (sessionDeleted(summary.id)) return;
   attachmentEpoch += 1;
   missingCurrentConversations.delete(summary.conversationId ?? '');
   const catalog = attachmentCatalog;
@@ -1882,6 +1943,7 @@ function publishAttachmentRemoval(sessionId: string): void {
 
 /** A closing live session must become the durable ordered row before its live overlay vanishes. */
 function publishClosedSummary(summary: SessionSummary): void {
+  if (sessionDeleted(summary.id)) return;
   // If the first catalog pass already read this row before close, force that in-flight snapshot
   // to retry. Once a catalog exists, this is just one binary-positioned row update.
   attachmentEpoch += 1;
@@ -1921,11 +1983,12 @@ async function ensureAttachmentCatalog(): Promise<AttachmentCatalog> {
       for (let offset = 0; offset < candidates.length; offset += ATTACHMENT_CATALOG_READ_CONCURRENCY) {
         const summaries = await Promise.all(
           candidates.slice(offset, offset + ATTACHMENT_CATALOG_READ_CONCURRENCY).map(async (name) => {
+            if (sessionDeleted(name)) return null;
             const live = open.get(name);
             return live?.summary ?? await readCatalogSummary(name).catch(() => null);
           })
         );
-        for (const summary of summaries) if (summary) indexSummary(catalog, summary);
+        for (const summary of summaries) if (summary && !sessionDeleted(summary.id)) indexSummary(catalog, summary);
       }
       catalog.orderedIds = [...catalog.summaries.values()]
         .sort(compareSummariesNewestFirst)
@@ -1965,8 +2028,8 @@ async function readAllSummaries(): Promise<SessionSummary[]> {
     logWarn(`session store: more than ${MAX_SCANNED_SESSIONS} session folders; older ones were not scanned`);
   for (let offset = 0; offset < Math.min(candidates.length, MAX_SCANNED_SESSIONS); offset += ATTACHMENT_CATALOG_READ_CONCURRENCY) {
     const rows = await Promise.all(candidates.slice(offset, Math.min(offset + ATTACHMENT_CATALOG_READ_CONCURRENCY, MAX_SCANNED_SESSIONS))
-      .map(async name => open.get(name)?.summary ?? await readMeta(name)));
-    for (const summary of rows) if (summary) summaries.push({ ...summary });
+      .map(async name => sessionDeleted(name) ? null : open.get(name)?.summary ?? await readMeta(name)));
+    for (const summary of rows) if (summary && !sessionDeleted(summary.id)) summaries.push({ ...summary });
   }
   summaries.sort((a, b) => b.updatedAt - a.updatedAt);
   return summaries;
@@ -1984,9 +2047,9 @@ async function readAllSummaries(): Promise<SessionSummary[]> {
 async function readEverySummary(): Promise<SessionSummary[]> {
   const catalog = await ensureAttachmentCatalog();
   const summaries = new Map<string, SessionSummary>();
-  for (const summary of catalog.summaries.values()) summaries.set(summary.id, summary);
+  for (const summary of catalog.summaries.values()) if (!sessionDeleted(summary.id)) summaries.set(summary.id, summary);
   // Live projections are authoritative between debounced meta writes.
-  for (const entry of open.values()) summaries.set(entry.summary.id, entry.summary);
+  for (const entry of open.values()) if (!sessionDeleted(entry.summary.id)) summaries.set(entry.summary.id, entry.summary);
   return [...summaries.values()].map((summary) => ({ ...summary })).sort(compareSummariesNewestFirst);
 }
 
@@ -2026,12 +2089,13 @@ export async function listSessionPage(options: {
 } = {}): Promise<SessionPage> {
   const catalog = await ensureAttachmentCatalog();
   const limit = Math.max(1, Math.min(MAX_LISTED_SESSIONS, Math.floor(options.limit ?? MAX_LISTED_SESSIONS)));
-  const openIds = new Set(open.keys());
+  const openIds = new Set([...open.keys()].filter((id) => !sessionDeleted(id)));
   const candidates: SessionSummary[] = [];
 
   // Open summaries are authoritative between debounced metadata writes. There are normally one
   // or a handful, so overlay them explicitly instead of rebuilding/sorting every retained row.
   for (const entry of open.values()) {
+    if (sessionDeleted(entry.summary.id)) continue;
     if (entry.summary.origin?.kind === 'helper') continue;
     if (options.cursor && !comesAfterCursor(entry.summary, options.cursor)) continue;
     candidates.push({ ...entry.summary, chatIds: [...entry.summary.chatIds], agents: [...entry.summary.agents] });
@@ -2045,7 +2109,7 @@ export async function listSessionPage(options: {
   for (const id of catalog.orderedIds) {
     if (openIds.has(id)) continue;
     const summary = catalog.summaries.get(id);
-    if (!summary || summary.origin?.kind === 'helper' || (options.cursor && !comesAfterCursor(summary, options.cursor))) continue;
+    if (!summary || sessionDeleted(summary.id) || summary.origin?.kind === 'helper' || (options.cursor && !comesAfterCursor(summary, options.cursor))) continue;
     if (durableEligible > limit) {
       durableHasMore = true;
       break;
@@ -2061,9 +2125,9 @@ export async function listSessionPage(options: {
   const nextCursor = hasMore && last ? { updatedAt: last.updatedAt, id: last.id } : null;
   let total = 0;
   for (const summary of catalog.summaries.values()) {
-    if (!openIds.has(summary.id) && summary.origin?.kind !== 'helper') total += 1;
+    if (!sessionDeleted(summary.id) && !openIds.has(summary.id) && summary.origin?.kind !== 'helper') total += 1;
   }
-  for (const entry of open.values()) if (entry.summary.origin?.kind !== 'helper') total += 1;
+  for (const entry of open.values()) if (!sessionDeleted(entry.summary.id) && entry.summary.origin?.kind !== 'helper') total += 1;
   return { sessions, total, nextCursor };
 }
 
@@ -2111,6 +2175,7 @@ export async function findSessionByConversation(
   // first session's initial files are still being written. Rebinds never expose B here early:
   // they mutate the live summary only after durable meta says B.
   for (const [id, entry] of open) {
+    if (sessionDeleted(id)) continue;
     if (entry.summary.conversationId === conversationId) currentIds.add(id);
   }
   const current = (
@@ -2137,6 +2202,7 @@ export async function findSessionByConversation(
   }
   const historicalIds = new Set(catalog.historical.get(conversationId) ?? []);
   for (const [id, entry] of open) {
+    if (sessionDeleted(id)) continue;
     if (entry.summary.chatIds.includes(conversationId)) historicalIds.add(id);
   }
   const historical = (
@@ -2167,9 +2233,11 @@ export async function conversationWasSuperseded(conversationId: string): Promise
   const catalog = await ensureAttachmentCatalog();
   const sessionIds = new Set(catalog.historical.get(conversationId) ?? []);
   for (const [id, entry] of open) {
+    if (sessionDeleted(id)) continue;
     if (entry.summary.chatIds.includes(conversationId)) sessionIds.add(id);
   }
   for (const id of sessionIds) {
+    if (sessionDeleted(id)) continue;
     const summary = open.get(id)?.summary ?? catalog.summaries.get(id) ?? null;
     if (summary?.chatIds.includes(conversationId) && summary.conversationId !== conversationId) return true;
   }
@@ -2232,7 +2300,7 @@ export async function getSession(id: string): Promise<SessionSummary | null> {
 export async function sessionDirectoryMissing(id: string): Promise<boolean> {
   assertSessionId(id);
   const dir = sessionDir(id);
-  if (open.has(id) || opening.has(id)) return false;
+  if (open.has(id) || opening.has(id) || reconciling.has(id) || deletingSessions.has(id)) return false;
   try {
     await fs.lstat(dir);
     return false;
@@ -2241,7 +2309,8 @@ export async function sessionDirectoryMissing(id: string): Promise<boolean> {
   }
   // An unavailable history root is not evidence that the user removed this session.
   try {
-    return (await fs.stat(root)).isDirectory() && !open.has(id) && !opening.has(id);
+    return (await fs.stat(root)).isDirectory() && !open.has(id) && !opening.has(id) &&
+      !reconciling.has(id) && !deletingSessions.has(id);
   } catch { return false; }
 }
 
@@ -2741,10 +2810,7 @@ export async function pruneSessions(retainDays: number): Promise<number> {
     if (open.has(summary.id)) continue;
     if (newestHandoff && newestHandoff.sessionId === summary.id) continue;
     try {
-      await fs.rm(sessionDir(summary.id), { recursive: true, force: true });
-      invalidateAssetUsage(summary.id);
-      publishAttachmentRemoval(summary.id);
-      removed++;
+      if (await removeSession(summary.id, true)) removed++;
     } catch (err) {
       logWarn(`could not remove old session ${summary.id}: ${(err as Error).message}`);
     }
@@ -2752,17 +2818,80 @@ export async function pruneSessions(retainDays: number): Promise<number> {
   return removed;
 }
 
-export async function deleteSession(id: string): Promise<void> {
+async function removeSession(id: string, onlyIfClosed: boolean): Promise<boolean> {
   assertSessionId(id);
-  const entry = open.get(id);
-  if (entry) {
-    if (entry.metaTimer) clearTimeout(entry.metaTimer);
-    await entry.queue.catch(() => undefined);
-    open.delete(id);
+  const deleting = deletingSessions.get(id);
+  if (deleting) {
+    await deleting;
+    return true;
   }
-  await fs.rm(sessionDir(id), { recursive: true, force: true });
-  invalidateAssetUsage(id);
-  publishAttachmentRemoval(id);
+  if (onlyIfClosed && (open.has(id) || opening.has(id))) return false;
+
+  // This synchronous publication is the revocation boundary. No reconstruction admitted after
+  // this point may write or publish the old generation, even while deletion drains earlier work.
+  deletedSessions.add(id);
+  // Invalidate any catalog build that may already have captured this session's live/durable row.
+  // A build starting after this point also sees the tombstone checks above and skips it.
+  attachmentEpoch += 1;
+  const entry = open.get(id);
+  const openingWork = opening.get(id);
+  const reconcilingWork = reconciling.get(id);
+  if (entry?.metaTimer) {
+    clearTimeout(entry.metaTimer);
+    entry.metaTimer = null;
+  }
+
+  const work = (async () => {
+    if (entry) {
+      await entry.queue.catch(() => undefined);
+      if (entry.metaTimer) {
+        clearTimeout(entry.metaTimer);
+        entry.metaTimer = null;
+      }
+      if (open.get(id) === entry) open.delete(id);
+    }
+
+    // Only reconstruction that was already in flight needs an early sweep. This preserves the
+    // paused-reconstruction -> delete -> resume interleaving without turning ordinary retention
+    // into two physical removals of the same already-closed session.
+    if (openingWork || reconcilingWork) {
+      await fs.rm(sessionDir(id), { recursive: true, force: true }).catch(() => undefined);
+    }
+
+    await Promise.allSettled([
+      ...(openingWork ? [openingWork] : []),
+      ...(reconcilingWork ? [reconcilingWork] : [])
+    ]);
+
+    // A stale filesystem await may have crossed the first rm (for example mkdir already admitted
+    // before deletion). Sweep once more after every captured reconstruction settles.
+    const staleOpen = open.get(id);
+    if (staleOpen) {
+      if (staleOpen.metaTimer) {
+        clearTimeout(staleOpen.metaTimer);
+        staleOpen.metaTimer = null;
+      }
+      await staleOpen.queue.catch(() => undefined);
+      if (open.get(id) === staleOpen) open.delete(id);
+    }
+    await fs.rm(sessionDir(id), { recursive: true, force: true });
+    invalidateAssetUsage(id);
+    publishAttachmentRemoval(id);
+  })();
+  deletingSessions.set(id, work);
+  try {
+    await work;
+    return true;
+  } catch (error) {
+    deletedSessions.delete(id);
+    throw error;
+  } finally {
+    if (deletingSessions.get(id) === work) deletingSessions.delete(id);
+  }
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  await removeSession(id, false);
 }
 
 /** Test seam: forgets in-memory state without touching the files. */
@@ -2777,6 +2906,8 @@ export function resetSessionStoreForTests(): void {
   attachmentCatalog = null;
   attachmentCatalogLoading = null;
   attachmentEpoch = 0;
+  deletedSessions.clear();
+  deletingSessions.clear();
 }
 
 /** Test seam: puts the store back to never having been told where to write. */
@@ -2788,4 +2919,6 @@ export function unsetSessionRootForTests(): void {
   attachmentCatalog = null;
   attachmentCatalogLoading = null;
   attachmentEpoch = 0;
+  deletedSessions.clear();
+  deletingSessions.clear();
 }

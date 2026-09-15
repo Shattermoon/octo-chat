@@ -175,7 +175,11 @@ describe('request correlation ownership', () => {
         observedAt: now + 3
       })
     ).toBe('same');
-    expect(requestCorrelation(requestId)?.observedAt).toBe(now + 3);
+    expect(requestCorrelation(requestId)).toMatchObject({
+      requestId,
+      conversationId: 'conv-a',
+      sessionId: 'session-a'
+    });
   });
 
   it('does not age a proven request owner out just because the page evidence is old', () => {
@@ -194,35 +198,58 @@ describe('request correlation ownership', () => {
     expect(requestCorrelation(requestId)?.conversationId).toBe('conv-a');
   });
 
-  it('evicts by latest same-owner observation rather than original insertion order', () => {
-    const refreshedId = 'wfr_refreshed_old_request';
-    const correlation = (requestId: string, observedAt: number) => ({
-      requestId,
-      conversationId: 'conv-a',
-      sessionId: 'session-a',
-      messageId: `msg-${requestId}`,
-      tool: 'read',
-      observedAt
-    });
+  it('keeps and restores a proven owner beyond the former 50,000-entry pressure bound', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'clf-correlation-pressure-'));
+    try {
+      resetDurableForTests();
+      initDurableStore(dir);
+      const permanentId = 'wfr_permanent_owner';
+      const correlation = (requestId: string, observedAt: number) => ({
+        requestId,
+        conversationId: 'conv-a',
+        sessionId: 'session-a',
+        messageId: `msg-${requestId}`,
+        tool: 'read',
+        observedAt
+      });
 
-    // Fill the bounded registry exactly. The request we care about is deliberately the oldest
-    // insertion, then is observed again immediately before one new id forces an eviction.
-    observeRequestCorrelations([
-      correlation(refreshedId, 1),
-      ...Array.from({ length: 49_999 }, (_, index) => correlation(`wfr_fill_${index}`, index + 2))
-    ]);
-    expect(
-      observeRequestCorrelation({
-        ...correlation(refreshedId, 100_000),
-        messageId: 'msg-refreshed'
-      })
-    ).toBe('same');
+      // The request we care about is deliberately the oldest insertion. The old implementation
+      // kept security ownership and diagnostic freshness in one 50,000-entry LRU, so one more
+      // exact request made this already-proven owner become unknown again. Restore also sliced
+      // the saved registry back to that same bound, so exercise both process pressure and restart.
+      observeRequestCorrelations([
+        correlation(permanentId, 1),
+        ...Array.from({ length: 50_000 }, (_, index) => correlation(`wfr_fill_${index}`, index + 2))
+      ]);
 
-    observeRequestCorrelation(correlation('wfr_newest', 100_001));
+      expect(requestCorrelation(permanentId)).toMatchObject({
+        requestId: permanentId,
+        conversationId: 'conv-a',
+        sessionId: 'session-a'
+      });
+      await flushDurable();
+      resetCorrelationRegistryForTests();
+      await restoreRequestCorrelations();
+      expect(requestCorrelation(permanentId)).toMatchObject({
+        requestId: permanentId,
+        conversationId: 'conv-a',
+        sessionId: 'session-a'
+      });
 
-    expect(requestCorrelation(refreshedId)?.conversationId).toBe('conv-a');
-    expect(requestCorrelation(refreshedId)?.observedAt).toBe(100_000);
-    expect(requestCorrelation('wfr_fill_0')).toBeNull();
+      expect(
+        observeRequestCorrelation({
+          ...correlation(permanentId, 100_001),
+          conversationId: 'conv-b',
+          sessionId: 'session-b',
+          messageId: 'msg-foreign-claim'
+        })
+      ).toBe('refused');
+      expect(requestCorrelation(permanentId)?.conversationId).toBe('conv-a');
+    } finally {
+      resetCorrelationRegistryForTests();
+      resetDurableForTests();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('restores proven request ownership from durable state after an app restart', async () => {
