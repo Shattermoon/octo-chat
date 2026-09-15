@@ -1,6 +1,6 @@
 # Contributing
 
-Octo Chat is a Windows/Linux beta maintained by one person. Bug reports, focused fixes and concrete improvements are welcome. macOS shipping is paused for the current release line.
+Octo Chat is a Windows/Linux beta maintained by one person. Bug reports, focused fixes and concrete improvements are welcome. macOS is not a supported build or runtime target.
 
 ## Before a pull request
 
@@ -10,7 +10,7 @@ Keep changes narrow. Preserve existing permission, identity and recovery behavio
 
 ## Development setup
 
-Development requires Node 22+ and is supported on Windows and Linux. Native Desktop/computer-use is currently a Windows product surface. Core, extension, sessions, agents and tunnel behavior must stay portable across supported platforms. Retained macOS source is legacy/paused code, not a current release target.
+Development requires Node 22+ and is supported on Windows and Linux. Native Desktop/computer-use is a Windows product surface. Core, extension, sessions, agents and tunnel behavior must stay portable across the supported Windows/Linux platforms.
 
 ```sh
 npm ci

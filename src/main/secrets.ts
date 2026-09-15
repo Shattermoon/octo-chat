@@ -1,8 +1,8 @@
 /**
  * Secret storage backed by the OS.
  *
- * Electron safeStorage delegates to the host OS: DPAPI on Windows, Keychain on macOS,
- * and a desktop secret store such as libsecret/KWallet on Linux. The plaintext key exists
+ * Electron safeStorage delegates to the host OS: DPAPI on Windows and a desktop secret store
+ * such as libsecret/KWallet on Linux. The plaintext key exists
  * only inside the main process: it is never sent over IPC, never written to config.json,
  * and never logged. Linux's `basic_text` fallback is deliberately rejected below because
  * presenting obfuscation as credential encryption would weaken the app on the new port.
@@ -88,12 +88,9 @@ export async function secureStorageStatus(platform: NodeJS.Platform = process.pl
     if (!(await safeStorage.isAsyncEncryptionAvailable())) {
       return {
         available: false,
-        detail:
-          platform === 'linux'
-            ? 'Secure credential storage is unavailable. Start or unlock a Linux desktop keyring/Secret Service (for example GNOME Keyring or KWallet), then try again.'
-            : platform === 'darwin'
-              ? 'macOS Keychain credential storage is unavailable. Unlock the login keychain, then try again.'
-              : 'Secure operating-system credential storage is unavailable on this machine.'
+        detail: platform === 'linux'
+          ? 'Secure credential storage is unavailable. Start or unlock a Linux desktop keyring/Secret Service (for example GNOME Keyring or KWallet), then try again.'
+          : 'Secure operating-system credential storage is unavailable on this machine.'
       };
     }
     if (platform === 'linux') {
@@ -140,8 +137,8 @@ function parseSecretStore(json: string): Record<string, string> {
 
 async function loadAll(): Promise<Record<string, string>> {
   const generation = loadGeneration;
-  // Keychain / Secret Service availability can be transient on macOS/Linux (for example while
-  // the login keychain is locked or no desktop keyring has been unlocked yet). Do not attempt
+  // Secret Service availability can be transient on Linux (for example while no desktop keyring
+  // has been unlocked yet). Do not attempt
   // decryption in that state and, crucially, do not cache an empty object: once secure storage
   // becomes available later in the same process, the next read must retry the real encrypted
   // file. Caching `{}` here would make a later setSecret() overwrite the existing blob and erase

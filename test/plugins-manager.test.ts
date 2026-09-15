@@ -124,7 +124,6 @@ describe('external plugin authority', () => {
 
   it('finds standard desktop-installed runtimes without replacing inherited PATH precedence', () => {
     const inherited = { PATH: '/custom/bin:/usr/bin:/bin', HOME: '/Users/example' };
-    expect(pluginInstaller.pluginEnvironment(inherited, 'darwin').PATH).toBe('/custom/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/Users/example/.local/bin');
     const linux = pluginInstaller.pluginEnvironment({ PATH: '/usr/local/bin:/usr/bin', HOME: '/home/example' }, 'linux');
     expect(linux.PATH).toBe('/usr/local/bin:/usr/bin:/home/example/.local/bin');
     expect(pluginInstaller.pluginEnvironment(linux, 'linux')).toEqual(linux);

@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nativePrebuildDir, parseTarget, sharpPackagesFor, tarExecutableForPlatform } from './packaging-targets.mjs';
@@ -144,11 +144,6 @@ async function stageTargetPayload(platform, arch, sharpPackages) {
     await mkdir(path.dirname(destination), { recursive: true });
     await cp(source, destination, { recursive: true });
   }
-  // node-pty launches this helper as a process on macOS. Preserve the npm tarball's executable
-  // contract explicitly instead of depending on host/filesystem copy-mode behaviour.
-  if (platform === 'darwin') {
-    await chmod(path.join(payloadRoot, 'node-pty', 'prebuilds', prebuildDir, 'spawn-helper'), 0o755);
-  }
   say(`${platform}-${arch} native packaging payload staged.`);
 }
 
@@ -167,7 +162,6 @@ async function main() {
     requirePrebuild(`node-pty/prebuilds/win32-${arch}/conpty/OpenConsole.exe`);
   } else {
     requirePrebuild(`node-pty/prebuilds/${prebuildDir}/pty.node`);
-    if (platform === 'darwin') requirePrebuild(`node-pty/prebuilds/${prebuildDir}/spawn-helper`);
   }
   requirePrebuild(`tree-sitter/prebuilds/${prebuildDir}/tree-sitter.node`);
   requirePrebuild(`tree-sitter-bash/prebuilds/${prebuildDir}/tree-sitter-bash.node`);

@@ -60,17 +60,20 @@ describe('browser-backed ChatGPT commands', () => {
     expect(await isPreferredBrowserRunning('win32', probe)).toBeNull();
     probe.mockClear();
     expect(await isPreferredBrowserRunning('aix', probe)).toBeNull();
+    expect(await isPreferredBrowserRunning('darwin', probe)).toBeNull();
     expect(probe).not.toHaveBeenCalled();
+    expect(preferredBrowserCandidates('darwin', { HOME: '/Users/example', PATH: '/usr/local/bin' }, '/Users/example')).toEqual([]);
   });
-  it.each(['darwin', 'linux'] as const)('observes selected process names on %s and fails closed on incomplete probes', async platform => {
-    const result = { stdout: '/sbin/init\nps\n/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n', stderr: '', exitCode: 0, timedOut: false, truncated: false, durationMs: 1 };
+  it('observes selected Linux process names and fails closed on incomplete probes', async () => {
+    const platform = 'linux' as const;
+    const result = { stdout: '/sbin/init\nps\ngoogle-chrome\n', stderr: '', exitCode: 0, timedOut: false, truncated: false, durationMs: 1 };
     const probe = vi.fn(async () => result);
     expect(await isPreferredBrowserRunning(platform, undefined, 'chrome', probe)).toBe(true);
     expect(await isPreferredBrowserRunning(platform, undefined, 'edge', probe)).toBe(false);
     result.stdout = 'init\nmsedge\nps\n';
     expect(await isPreferredBrowserRunning(platform, undefined, 'edge', probe)).toBe(true);
     expect(await isPreferredBrowserRunning(platform, undefined, 'chrome', probe)).toBe(false);
-    result.stdout = 'init\n/Applications/Brave Browser.app/Contents/MacOS/Brave Browser\nbrave-browser-nightly\nps\n';
+    result.stdout = 'init\nbrave-browser-nightly\nps\n';
     expect(await isPreferredBrowserRunning(platform, undefined, 'brave', probe)).toBe(true);
     expect(await isPreferredBrowserRunning(platform, undefined, 'chrome', probe)).toBe(false);
     expect(await isPreferredBrowserRunning(platform, undefined, 'edge', probe)).toBe(false);
@@ -140,40 +143,6 @@ describe('browser-backed ChatGPT commands', () => {
     expect(findPreferredBrowser('win32', env, 'C:\\Users\\example', (candidate) => candidate === wanted)).toBe(wanted);
   });
 
-  it('finds the standard Google Chrome app on macOS before Chromium fallbacks', () => {
-    const candidates = preferredBrowserCandidates('darwin', { HOME: '/Users/example' }, '/Users/example');
-    expect(candidates[0]).toBe('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
-    expect(
-      findPreferredBrowser('darwin', { HOME: '/Users/example' }, '/Users/example', (candidate) => candidate === candidates[0])
-    ).toBe(candidates[0]);
-  });
-
-  it('falls back to a per-user macOS Applications install when system Chrome is absent', () => {
-    const candidates = preferredBrowserCandidates('darwin', { HOME: '/Users/example' }, '/Users/example');
-    const userChrome = '/Users/example/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    expect(candidates[1]).toBe(userChrome);
-    expect(findPreferredBrowser('darwin', { HOME: '/Users/example' }, '/Users/example', (candidate) => candidate === userChrome)).toBe(
-      userChrome
-    );
-  });
-
-  it('discovers every standard macOS Chrome channel before Chromium fallback', () => {
-    const candidates = preferredBrowserCandidates('darwin', { HOME: '/Users/example' }, '/Users/example');
-    const systemCandidates = candidates.filter((candidate) => candidate.startsWith('/Applications/'));
-    expect(systemCandidates).toEqual([
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
-      '/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev',
-      '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium'
-    ]);
-
-    const canary = '/Users/example/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary';
-    expect(findPreferredBrowser('darwin', { HOME: '/Users/example' }, '/Users/example', (candidate) => candidate === canary)).toBe(
-      canary
-    );
-  });
-
   it('searches PATH for Chrome/Chromium on Linux instead of relying on the default browser', () => {
     const env = { HOME: '/home/example', PATH: '/custom/bin:/usr/local/bin:/usr/bin' };
     const wanted = '/custom/bin/google-chrome';
@@ -230,10 +199,10 @@ describe('browser-backed ChatGPT commands', () => {
     expect(attempts).toEqual([first, second]);
   });
 
-  it.each(['win32', 'darwin'] as const)('uses background switches only for Windows orchestration (%s)', async (platform) => {
+  it.each(['win32', 'linux'] as const)('uses background switches only for Windows orchestration (%s)', async (platform) => {
     const browser = platform === 'win32'
       ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-      : '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      : '/usr/bin/google-chrome';
     const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
     const url = 'https://chatgpt.com/?clf=worker-marker&model=example';
     await openInPreferredBrowser(url, {

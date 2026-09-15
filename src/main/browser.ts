@@ -18,7 +18,7 @@ export async function isPreferredBrowserRunning(
 ): Promise<boolean | null> {
   try {
     if (platform !== 'win32') {
-      if (platform !== 'darwin' && platform !== 'linux') return null;
+      if (platform !== 'linux') return null;
       // comm contains executable names, never arguments or browsing/profile data.
       const result = await command('ps', ['-A', '-o', 'comm='], os.tmpdir(), 5000);
       if (result.timedOut || result.truncated || result.exitCode !== 0 || !result.stdout.trim()) return null;
@@ -94,32 +94,6 @@ export function preferredBrowserCandidates(
       .map(root => p.join(root, ...parts));
   }
 
-  if (platform === 'darwin') {
-    // Release channels have separate bundles. Keep Beta/Dev/Canary-only installs usable
-    // without crossing the user's chosen browser family.
-    const channels = browser === 'edge' ? [
-      ['Microsoft Edge.app', 'Microsoft Edge'],
-      ['Microsoft Edge Beta.app', 'Microsoft Edge Beta'],
-      ['Microsoft Edge Dev.app', 'Microsoft Edge Dev'],
-      ['Microsoft Edge Canary.app', 'Microsoft Edge Canary']
-    ] : browser === 'brave' ? [
-      ['Brave Browser.app', 'Brave Browser'],
-      ['Brave Browser Beta.app', 'Brave Browser Beta'],
-      ['Brave Browser Dev.app', 'Brave Browser Dev'],
-      ['Brave Browser Nightly.app', 'Brave Browser Nightly']
-    ] : [
-      ['Google Chrome.app', 'Google Chrome'],
-      ['Google Chrome Beta.app', 'Google Chrome Beta'],
-      ['Google Chrome Dev.app', 'Google Chrome Dev'],
-      ['Google Chrome Canary.app', 'Google Chrome Canary'],
-      ['Chromium.app', 'Chromium']
-    ] as const;
-    return channels.flatMap(([bundle, executable]) => [
-      path.posix.join('/Applications', bundle, 'Contents', 'MacOS', executable),
-      ...(home ? [path.posix.join(home, 'Applications', bundle, 'Contents', 'MacOS', executable)] : [])
-    ]);
-  }
-
   if (platform === 'linux') {
     const pathValue = env.PATH ?? '';
     // Search release-channel launchers too: the companion need not be installed in Stable.
@@ -184,6 +158,7 @@ export function preferredBrowserCandidates(
       '/var/lib/flatpak/exports/bin/org.chromium.Chromium'
     ].filter(Boolean);
   }
+  return [];
 
   return [];
 }

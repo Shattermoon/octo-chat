@@ -1,5 +1,12 @@
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Capture the real host temp directory before this suite spoofs process.platform to win32.
+// Node's os.tmpdir() selects its environment-variable strategy from process.platform at call
+// time; on a Linux CI host with a spoofed win32 platform there is no Windows TEMP/SystemRoot,
+// which otherwise produces the synthetic path `undefined\\temp`.
+const HOST_TMPDIR = os.tmpdir();
 
 const fake = vi.hoisted(() => {
   type Listener = { fn: (...args: any[]) => void; once: boolean };
@@ -91,10 +98,6 @@ const fake = vi.hoisted(() => {
 vi.mock('electron', () => ({ clipboard: fake.clipboard }));
 
 vi.mock('node:child_process', () => ({ spawn: fake.spawn }));
-vi.mock('node:worker_threads', () => ({ Worker: fake.Transport }));
-vi.mock('node:fs', async (original) => ({
-  ...await original<typeof import('node:fs')>(), existsSync: () => true
-}));
 vi.mock('../src/main/env.js', () => ({
   ensureUsablePath: vi.fn(), normalizeEnvironment: (env: NodeJS.ProcessEnv) => ({ ...env }),
   setEnvValue: (env: NodeJS.ProcessEnv, key: string, value: string) => { env[key] = value; }
@@ -105,9 +108,8 @@ vi.mock('../src/main/exec.js', () => ({
 }));
 vi.mock('../src/main/logger.js', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }));
 
-// Both production transports exercise the same lifecycle contract without native input,
-// OS permissions or a display server. Only native replies and process/worker exits are mocked.
-describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (transport) => {
+// The production Windows helper transport exercises this lifecycle contract without native input.
+describe('Desktop reply provenance (stdio)', () => {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
   let computer: typeof import('../src/main/computer/index.js');
   beforeEach(async () => {
@@ -117,8 +119,8 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     fake.clipboard.writeText.mockClear();
     fake.overrides.focusFailure = false;
     fake.overrides.geometry = false;
-    Object.defineProperty(process, 'platform', { ...platform, value: transport === 'addon' ? 'darwin' : 'linux' });
-    vi.stubEnv('OCTO_MAOCTO_DESKTOP_HELPER', '');
+    vi.stubEnv('TEMP', HOST_TMPDIR);
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     computer = await import('../src/main/computer/index.js');
   });
   afterEach(async () => {
@@ -184,7 +186,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.requests).toHaveLength(sent);
   });
 
-  it.runIf(transport === 'stdio')('binds Windows input and its result capture to the explicitly selected window', async () => {
+  it('binds Windows input and its result capture to the explicitly selected window', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     const state = await computer.getWindowState({ window: 77 });
     await computer.actAndCapture([
@@ -196,7 +198,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.requests.at(-1)).toMatchObject({ op: 'capture', id: 77 });
   });
 
-  it.runIf(transport === 'stdio')('rejects mismatched Windows coordinates, refs and focus before any batch effect', async () => {
+  it('rejects mismatched Windows coordinates, refs and focus before any batch effect', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     const state = await computer.getWindowState({ window: 77 });
     const sent = fake.requests.length;
@@ -212,7 +214,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.requests).toHaveLength(sent);
   });
 
-  it.runIf(transport === 'stdio')('retains app and popup ownership with raw wheel units and indexed click options at native dispatch', async () => {
+  it('retains app and popup ownership with raw wheel units and indexed click options at native dispatch', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     const state = await computer.getWindowState({ window: 77 });
     await computer.act([{ type: 'scroll', x: 20, y: 20, scroll_y: 120, scrollUnit: 'wheel' }], {
@@ -229,7 +231,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     });
   });
 
-  it.runIf(transport === 'stdio')('pastes exact multiline text once and refuses later clipboard replacement in that batch', async () => {
+  it('pastes exact multiline text once and refuses later clipboard replacement in that batch', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     const text = 'first\nsecond\r\nthird';
     const result = await computer.act([{ type: 'paste', text }], { window: 77 });
@@ -244,7 +246,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.clipboard.writeText).not.toHaveBeenCalled();
   });
 
-  it.runIf(transport === 'stdio')('waits for asynchronous clipboard publication before injecting paste', async () => {
+  it('waits for asynchronous clipboard publication before injecting paste', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     let finishWrite!: () => void;
     fake.clipboard.writeText.mockImplementationOnce(() => new Promise<void>(resolve => { finishWrite = resolve; }));
@@ -256,7 +258,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.requests.filter(request => request.op === 'act').at(-1)?.actions).toEqual([{ type: 'keypress', keys: ['ctrl', 'v'] }]);
   });
 
-  it.runIf(transport === 'stdio')('refuses paste when asynchronous clipboard publication fails', async () => {
+  it('refuses paste when asynchronous clipboard publication fails', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     fake.clipboard.writeText.mockRejectedValueOnce(new Error('clipboard unavailable'));
     await expect(computer.act([{ type: 'paste', text: 'pending clipboard' }], { window: 77 }))
@@ -264,7 +266,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     expect(fake.requests.filter(request => request.op === 'act')).toHaveLength(1);
   });
 
-  it.runIf(transport === 'stdio')('does not retry paste after clipboard publication when final control authority is revoked', async () => {
+  it('does not retry paste after clipboard publication when final control authority is revoked', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     const effects: string[] = [];
     const beforeSideEffect = vi.fn(async (effect: string) => {
@@ -288,7 +290,7 @@ describe.each(['stdio', 'addon'] as const)('Desktop reply provenance (%s)', (tra
     ]);
   });
 
-  it.runIf(transport === 'stdio')('does not replace the clipboard when target activation fails before paste', async () => {
+  it('does not replace the clipboard when target activation fails before paste', async () => {
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
     fake.overrides.focusFailure = true;
     await expect(computer.act([{ type: 'paste', text: 'must not replace clipboard' }], { window: 77, app: 'fixture.exe' }))

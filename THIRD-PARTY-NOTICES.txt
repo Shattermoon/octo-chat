@@ -4727,8 +4727,7 @@ You may modify these libraries and debug those modifications, including by rever
 engineering the combined application for that purpose. The application imposes no
 additional restriction on those rights. Libraries are ordinary files under
 `app.asar.unpacked`. See `SOURCE-BUILD.md` in the source download for exact revisions,
-rebuilding and replacement. On macOS a modified application copy needs a new local
-ad-hoc seal; no publisher key is required by this release.
+rebuilding and replacement on the supported Windows/Linux targets.
 
 Electron/Chromium notices ship separately as `LICENSE.electron.txt` and
 `LICENSES.chromium.html` in application resources. Electron 44.3.0's source, dependency

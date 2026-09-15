@@ -12,15 +12,7 @@ import * as packagingTargets from '../scripts/packaging-targets.mjs';
 import { assertReleaseAbsent } from '../scripts/check-release-absent.mjs';
 // @ts-ignore Build scripts are intentionally plain ESM JavaScript.
 import { assertCurrentTunnelRelease } from '../scripts/verify-current-tunnel.mjs';
-// @ts-ignore Build scripts are intentionally plain ESM JavaScript.
-import * as macOSAuditUtils from '../scripts/macos-audit-utils.mjs';
 const { RIPGREP, TUNNEL_CLIENT } = packagingVersions;
-const {
-  assertCompatibleMacOSDeploymentTargets,
-  assertNoTrustBearingMacCodeSignature,
-  macOSDeploymentTargetsFromOtool,
-  withOtoolSafePath
-} = macOSAuditUtils;
 const {
   normalizeArch,
   normalizePlatform,
@@ -375,127 +367,10 @@ describe('cross-platform packaging targets', () => {
     expect(builder.mac).toBeUndefined();
     expect(SUPPORTED_PLATFORMS).toEqual(['win32', 'linux']);
     expect(() => normalizePlatform('darwin')).toThrow(/Unsupported packaging platform/);
+    expect(Object.keys(TUNNEL_CLIENT.targets)).toEqual(['win32', 'linux']);
+    expect(Object.keys(RIPGREP.targets)).toEqual(['win32', 'linux']);
     const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
-    expect(readme).toContain('macOS | **Temporarily unsupported**');
-  });
-
-  it('hides Electron helper parentheses from otool-classic without changing the inspected file', () => {
-    const file = '/Applications/Octo Chat.app/Contents/Frameworks/Octo Chat Helper (GPU).app/Contents/MacOS/Octo Chat Helper (GPU)';
-    const calls: Array<{ kind: string; args: unknown[] }> = [];
-    const result = withOtoolSafePath(
-      file,
-      (safePath: string) => {
-        calls.push({ kind: 'inspect', args: [safePath] });
-        expect(path.basename(safePath)).toBe('payload');
-        expect(safePath).not.toMatch(/[()]/);
-        return 'otool-output';
-      },
-      {
-        tmpdir: '/tmp',
-        mkdtempSync: (prefix: string) => {
-          calls.push({ kind: 'mkdtemp', args: [prefix] });
-          return '/tmp/octo-otool-safe';
-        },
-        symlinkSync: (target: string, alias: string) => {
-          calls.push({ kind: 'symlink', args: [target, alias] });
-        },
-        rmSync: (target: string, options: unknown) => {
-          calls.push({ kind: 'remove', args: [target, options] });
-        }
-      }
-    );
-
-    expect(result).toBe('otool-output');
-    const safePrefix = path.join('/tmp', 'octo-otool-');
-    const safeDirectory = '/tmp/octo-otool-safe';
-    const safePayload = path.join(safeDirectory, 'payload');
-    expect(calls).toEqual([
-      { kind: 'mkdtemp', args: [safePrefix] },
-      { kind: 'symlink', args: [file, safePayload] },
-      { kind: 'inspect', args: [safePayload] },
-      { kind: 'remove', args: [safeDirectory, { recursive: true, force: true }] }
-    ]);
-  });
-
-  it('rejects Mach-O payloads whose deployment target exceeds the declared macOS floor', () => {
-    const modern = `
-Load command 10
-      cmd LC_BUILD_VERSION
-  cmdsize 32
- platform 1
-    minos 11.0
-      sdk 15.0
-Load command 11
-      cmd LC_VERSION_MIN_MACOSX
-  cmdsize 16
-  version 10.15
-      sdk 11.0
-`;
-    expect(macOSDeploymentTargetsFromOtool(modern)).toEqual(['11.0', '10.15']);
-    expect(() => assertCompatibleMacOSDeploymentTargets('good.node', modern, '12.0')).not.toThrow();
-
-    const tooNew = modern.replace('minos 11.0', 'minos 13.0');
-    expect(() => assertCompatibleMacOSDeploymentTargets('desktop.node', tooNew, '13.0')).not.toThrow();
-    expect(() => assertCompatibleMacOSDeploymentTargets('desktop.node', tooNew.replace('minos 13.0', 'minos 14.0'), '13.0')).toThrow(
-      /requires macOS 14\.0, newer than Info\.plist LSMinimumSystemVersion 13\.0/
-    );
-    expect(() => assertCompatibleMacOSDeploymentTargets('bad.node', tooNew, '12.0')).toThrow(
-      /requires macOS 13\.0, newer than Info\.plist LSMinimumSystemVersion 12\.0/
-    );
-    expect(() => assertCompatibleMacOSDeploymentTargets('missing.node', 'Load command 1\n cmd LC_SEGMENT_64', '12.0')).toThrow(
-      /no macOS deployment target load command/
-    );
-  });
-
-  it('allows Apple-Silicon ad-hoc signatures but rejects publisher-bearing macOS signatures', () => {
-    // The sealed ad-hoc bundle, which is what ships: no Authority, no TeamIdentifier, and the
-    // resource envelope its own executables imply.
-    expect(() => assertNoTrustBearingMacCodeSignature('adhoc.app', {
-      status: 0,
-      stdout: '',
-      stderr: 'Identifier=com.example\nSignature=adhoc\nTeamIdentifier=not set\n'
-    }, true)).not.toThrow();
-
-    expect(() => assertNoTrustBearingMacCodeSignature('developer-id.app', {
-      status: 0,
-      stdout: '',
-      stderr: 'Signature size=9000\nAuthority=Developer ID Application: Example Corp (TEAM123456)\nTeamIdentifier=TEAM123456\n'
-    }, true)).toThrow(/trust-bearing code signature/);
-    expect(() => assertNoTrustBearingMacCodeSignature('unknown-success.app', {
-      status: 0,
-      stdout: '',
-      stderr: 'Identifier=com.example\n'
-    }, true)).toThrow(/trust-bearing code signature/);
-    expect(() => assertNoTrustBearingMacCodeSignature('inspection-failed.app', {
-      status: null,
-      stdout: '',
-      stderr: 'codesign was terminated unexpectedly'
-    }, true)).toThrow(/inspection failed unexpectedly/);
-  });
-
-  /**
-   * Issue #66: the shape that shipped twice and would not launch.
-   *
-   * arm64 Mach-Os are ad-hoc signed by the linker whether anyone asks or not, so a bundle with no
-   * CodeResources is one whose executables claim a resource seal the bundle does not have. macOS
-   * reads that contradiction as damage — with Gatekeeper assessment already disabled, and no
-   * crash report to show for it. This assertion used to *demand* that state, which is why two
-   * releases shipped it and nothing caught them.
-   */
-  it('rejects a bundle whose executables are signed but which has no resource seal', () => {
-    expect(() => assertNoTrustBearingMacCodeSignature('linker-signed.app', {
-      status: 0,
-      stdout: '',
-      stderr: 'Identifier=com.example\nSignature=adhoc\nTeamIdentifier=not set\n'
-    }, false)).toThrow(/no bundle CodeResources envelope/);
-
-    // "Never signed at all" earns the same refusal. The seal is what macOS needs, and a packaged
-    // arm64 app cannot reach that state anyway — the linker signs it regardless.
-    expect(() => assertNoTrustBearingMacCodeSignature('unsigned.app', {
-      status: 1,
-      stdout: '',
-      stderr: 'code object is not signed at all'
-    }, false)).toThrow(/no bundle CodeResources envelope/);
+    expect(readme).toContain('macOS | **Not supported**');
   });
 
   it('fails release-existence preflight closed on API errors instead of spending packaging runners', async () => {

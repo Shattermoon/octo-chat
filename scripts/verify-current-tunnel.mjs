@@ -39,7 +39,7 @@ export async function assertCurrentTunnelRelease({
   }
   if (latestVersion !== pinnedVersion) {
     throw new Error(
-      `Pinned tunnel-client ${pinnedVersion} is stale; OpenAI's current release is ${latestVersion}. Update packaging-versions.mjs and its six checksums before publishing.`
+      `Pinned tunnel-client ${pinnedVersion} is stale; OpenAI's current release is ${latestVersion}. Update packaging-versions.mjs and its four checksums before publishing.`
     );
   }
 

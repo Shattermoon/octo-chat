@@ -21,16 +21,16 @@ Octo Chat is a permission boundary between ChatGPT and the logged-in OS user run
 - Screen, mouse/keyboard and clipboard permissions are desktop-wide capabilities on supported Windows builds, not folder permissions.
 - MCP servers bind to loopback and use secret tokenized paths. Public reachability comes only from the tunnel you configure.
 - The companion-extension bridge is a separate loopback service and exposes no filesystem, command or settings-mutation route.
-- Stored API/bridge credentials use Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, a secure desktop secret store on Linux). Linux `basic_text` is refused; normal Activity logs are redacted, capped and memory-only.
+- Stored API/bridge credentials use Electron `safeStorage` (DPAPI on Windows and a secure desktop secret store on Linux). Linux `basic_text` is refused; normal Activity logs are redacted, capped and memory-only.
 - Session recording is separate durable local history. It is on for fresh installs and can be disabled.
 
 ## Expected limitations
 
 These are properties of the current design, not vulnerability reports by themselves:
 
-- **Release binaries are not currently publisher-signed.** Windows SmartScreen or browsers can warn. Verify release SHA-256 checksums before running them. macOS builds are not published in the current release line.
+- **Release binaries are not currently publisher-signed.** Windows SmartScreen or browsers can warn. Verify release SHA-256 checksums before running them. macOS is not a supported release target.
 - **The Linux AppImage has a sandbox-availability fallback.** Its electron-builder static launcher can add `--no-sandbox` when the host disables unprivileged user namespaces. On Debian/Ubuntu, prefer the DEB on such restrictive systems if you do not want the portable AppImage to take that fallback.
-- **Fresh installs start Core permissions enabled and read-only mode off.** Windows additionally enables Desktop permissions; Desktop is unavailable on macOS/Linux. Review permissions before connecting ChatGPT. Existing installs keep their explicit stored choices.
+- **Fresh installs start Core permissions enabled and read-only mode off.** Windows additionally enables Desktop permissions; Desktop is unavailable on Linux and on unsupported hosts. Review permissions before connecting ChatGPT. Existing installs keep their explicit stored choices.
 - **Application path checks are not a kernel/VM sandbox.** They substantially constrain the app's filesystem tools, but same-user filesystem races can still exist. Do not treat approved roots as isolation from a hostile local process.
 - **Command and Windows Desktop capabilities are powerful by design.** If enabled, they can act wherever your logged-in user can act, subject to normal OS privilege boundaries.
 - **Session recording is intentionally detailed and is not encrypted by `safeStorage`.** Recorded conversations/tool activity stay local to this app, but anyone with access to your OS account may be able to read the session files.

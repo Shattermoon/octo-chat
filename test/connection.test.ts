@@ -316,9 +316,8 @@ describe('connection surface state', () => {
     mocks.caps.screen = true;
     const connection = await import('../src/main/connection.js');
     await connection.connect();
-    // Windows and macOS have native helpers. Linux masks the same stored preference from the
-    // live surface, so it intentionally does not prewarm anything.
-    expect(mocks.prewarm).toHaveBeenCalledTimes(process.platform === 'win32' || process.platform === 'darwin' ? 1 : 0);
+    // Windows has the native helper. Unsupported hosts mask the same stored preference.
+    expect(mocks.prewarm).toHaveBeenCalledTimes(process.platform === 'win32' ? 1 : 0);
   });
 
   it('does not let a Desktop permission hide a missing root required by Core capabilities', async () => {

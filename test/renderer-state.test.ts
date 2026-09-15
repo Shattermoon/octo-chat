@@ -141,30 +141,6 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
   stateListener(withTools);
   expect(w.document.getElementById('facts')!.textContent).toContain('Tools across Core + Desktop3 total');
   expect(w.document.getElementById('facts')!.textContent).not.toContain('of 9');
-
-  const withMissingMacAccess = structuredClone(withTools) as any;
-  withMissingMacAccess.platform = { family: 'macos', name: 'macOS', desktopAutomation: true };
-  withMissingMacAccess.config.readOnly = false;
-  withMissingMacAccess.config.capabilities.screen = true;
-  withMissingMacAccess.config.capabilities.control = true;
-  withMissingMacAccess.desktopAccess = {
-    screen: 'granted',
-    accessibility: 'missing',
-    checkedAt: 1,
-    error: null
-  };
-  stateListener(withMissingMacAccess);
-  const accessWarning = w.document.getElementById('desktopAccess')!;
-  expect(accessWarning.hidden).toBe(false);
-  expect(accessWarning.textContent).toContain('Accessibility: missing');
-  expect(accessWarning.textContent).toContain('live verdicts from the native backend');
-  expect((w.document.getElementById('openDesktopScreen') as HTMLButtonElement).hidden).toBe(true);
-  expect((w.document.getElementById('openDesktopAccessibility') as HTMLButtonElement).hidden).toBe(false);
-
-  const withReadOnlyMacAccess = structuredClone(withMissingMacAccess) as any;
-  withReadOnlyMacAccess.config.readOnly = true;
-  stateListener(withReadOnlyMacAccess);
-  expect(accessWarning.hidden).toBe(true);
 });
 
 it('serializes settings intent so rapid toggles and later UI changes cannot undo each other', async () => {
@@ -558,8 +534,8 @@ it('shows the current host Desktop tools without rebuilding permission controls 
     'launch_app', 'click', 'press_key', 'type_text', 'scroll', 'set_value', 'drag',
     'perform_secondary_action', 'activate_window', 'read_clipboard', 'write_clipboard', 'exec'];
   expect(names()).toEqual(windowsNames);
-  mounted.push({ ...mounted.state, platform: { family: 'macos', name: 'macOS', desktopAutomation: true } });
-  expect(names()).toEqual(['observe', 'computer', 'exec']);
+  mounted.push({ ...mounted.state, platform: { family: 'linux', name: 'Linux', desktopAutomation: false } });
+  expect(doc.querySelector<HTMLElement>('[data-group="desktop"]')!.hidden).toBe(true);
   expect(doc.querySelector('[data-cap="control"]')).toBe(control);
   mounted.push(mounted.state);
   expect(names()).toEqual(windowsNames);
@@ -588,17 +564,6 @@ it('preserves native Desktop permissions when saving unrelated settings on Linux
     clipboardRead: true,
     clipboardWrite: true
   });
-});
-
-it('uses native menu-bar/Dock wording on macOS instead of Windows tray copy', async () => {
-  const mounted = await mountChat({
-    platform: { family: 'macos', name: 'macOS', desktopAutomation: true }
-  });
-  const doc = mounted.window.document;
-
-  expect(doc.getElementById('backgroundRunningCopy')!.textContent).toContain('menu bar and Dock');
-  expect(doc.getElementById('backgroundRunningCopy')!.textContent).not.toContain('tray');
-  expect(doc.getElementById('minimizeToTrayCopy')!.textContent).toBe('Hide the window to the menu bar when closed');
 });
 
 it('surfaces the existing root rename API in the folder row', async () => {

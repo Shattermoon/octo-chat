@@ -120,9 +120,7 @@ const SH_FALLBACK_PATHS = ['/bin/sh'];
 const PWSH_FALLBACK_PATHS =
   process.platform === 'win32'
     ? ['C:\\Program Files\\PowerShell\\7\\pwsh.exe']
-    : process.platform === 'darwin'
-      ? ['/opt/homebrew/bin/pwsh', '/usr/local/bin/pwsh']
-      : ['/usr/local/bin/pwsh'];
+    : ['/usr/local/bin/pwsh'];
 const POWERSHELL_FALLBACK_PATHS =
   process.platform === 'win32' ? ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'] : [];
 
@@ -215,15 +213,16 @@ export function getShellByModelProvidedPath(shellPath: string, cwd: string = pro
 let cachedDefaultShell: { key: string; shell: DetectedShell } | null = null;
 
 /**
- * POSIX default-shell preference, kept pure so every CI host can assert both macOS and Linux
- * policy. A configured supported login shell wins; only the fallback differs by convention.
+ * POSIX default-shell preference for the supported Linux runtime. A configured supported login
+ * shell wins before the normal bash/zsh fallback.
  * PowerShell/cmd are never invented here, though an explicitly configured supported shell is
  * still respected just as Codex respects the user's selected shell.
  */
 export function posixShellPreference(platform: NodeJS.Platform, configured: ShellType | null): ShellType[] {
+  void platform;
   const order: ShellType[] = [
     ...(configured === null ? [] : [configured]),
-    ...(platform === 'darwin' ? (['zsh', 'bash'] as const) : (['bash', 'zsh'] as const))
+    'bash', 'zsh'
   ];
   return [...new Set(order)];
 }

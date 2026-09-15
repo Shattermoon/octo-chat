@@ -9,8 +9,8 @@ describe('native BrowserWindow icon policy', () => {
     );
   });
 
-  it.each(['win32', 'darwin'] as const)('preserves native executable/bundle icon semantics on %s', (platform) => {
-    expect(browserWindowIconPath(platform, true, '/irrelevant/resources')).toBeUndefined();
+  it('preserves the native Windows executable icon', () => {
+    expect(browserWindowIconPath('win32', true, '/irrelevant/resources')).toBeUndefined();
   });
 
   it('does not impose a generated packaging path on Linux development runs', () => {

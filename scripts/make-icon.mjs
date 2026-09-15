@@ -2,7 +2,7 @@
  * Generates every icon the project ships, with no image dependencies.
  *
  *   build/icon.ico            the Windows app icon (6 sizes in one file)
- *   build/icon.png            1024px source for macOS/Linux packaging (Retina-ready ICNS input)
+ *   build/icon.png            1024px source for Linux packaging
  *   build/icon-preview.png    256px preview, for looking at what changed
  *   build/runtime-icon.png    256px Linux BrowserWindow icon, packaged as a real resource
  *   extension/icons/*.png     16/32/48/128 for the Chrome extension

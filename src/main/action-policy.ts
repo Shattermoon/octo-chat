@@ -199,12 +199,6 @@ export function actionIntentFor(
   } else {
     if (operation === 'read_clipboard') return { actionClass: 'clipboard-read', target: 'clipboard' };
     if (operation === 'write_clipboard') return { actionClass: 'clipboard-write', target: 'clipboard' };
-    if (operation === 'observe') return { actionClass: 'observe', target: 'desktop' };
-    if (operation === 'computer') {
-      const requiredIntent = intentFromRequirements(requirement);
-      if (requiredIntent) return requiredIntent;
-      return { actionClass: 'desktop-interact', target: 'desktop' };
-    }
     if (WINDOWS_READ.has(operation!)) return { actionClass: 'observe', target: 'desktop' };
     if (operation === 'launch_app') return { actionClass: 'launch-application', target: 'application' };
     if (WINDOWS_INPUT.has(operation!)) return { actionClass: 'desktop-interact', target: 'desktop' };

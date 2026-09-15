@@ -19,7 +19,6 @@ import {
   GOAL_REASONING_LEVELS,
   WRITE_CAPABILITIES,
   type Capabilities,
-  DESKTOP_CAPABILITIES,
   type ArtifactSettings,
   type CompactionSettings,
   type Config,
@@ -461,17 +460,9 @@ const configSchema = z.object({
     .catch({ ...DEFAULT_MCP })
 });
 
-/**
- * Fresh-install Desktop exposure differs by host. Windows starts the Desktop group on. macOS has
- * a native backend too, but it starts **off** and is switched on by the user: every Desktop
- * action there also needs Screen Recording / Accessibility consent from System Settings, and a
- * fresh install must not publish a second connector nobody can use yet. Unsupported hosts mask
- * the group at the platform boundary while preserving stored choices for a moved config.
- */
+/** Windows starts native Desktop on; unsupported hosts mask it without erasing stored choices. */
 function firstLaunchCapabilities(platform: NodeJS.Platform, release?: string): Capabilities {
-  const capabilities = capabilitiesForPlatform({ ...ALL_FIRST_LAUNCH_CAPABILITIES }, platform, release);
-  if (platform === 'darwin') for (const capability of DESKTOP_CAPABILITIES) capabilities[capability] = false;
-  return capabilities;
+  return capabilitiesForPlatform({ ...ALL_FIRST_LAUNCH_CAPABILITIES }, platform, release);
 }
 
 export function defaultConfig(platform: NodeJS.Platform = process.platform, release?: string): Config {

@@ -47,6 +47,7 @@ export function commonBinaryDirsForPlatform(
   env: NodeJS.ProcessEnv = process.env,
   homeDirectory = env.HOME ?? env.USERPROFILE ?? os.homedir()
 ): string[] {
+  if (platform !== 'win32' && platform !== 'linux') return [];
   const platformPath = platform === 'win32' ? path.win32 : path.posix;
   if (platform === 'win32') {
     const home = env.USERPROFILE ?? homeDirectory;
@@ -71,10 +72,9 @@ export function commonBinaryDirsForPlatform(
         platformPath.join(homeDirectory, 'Downloads', 'tunnel-client')
       ]
     : [];
-  const systemDirs =
-    platform === 'darwin'
-      ? ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']
-      : ['/home/linuxbrew/.linuxbrew/bin', '/usr/local/bin', '/usr/bin', '/snap/bin'];
+  const systemDirs = platform === 'linux'
+    ? ['/home/linuxbrew/.linuxbrew/bin', '/usr/local/bin', '/usr/bin', '/snap/bin']
+    : [];
   return [...homeDirs, ...systemDirs];
 }
 
@@ -83,6 +83,10 @@ export function commonBinaryDirsForPlatform(
  * `hint` may be either the executable itself or the folder containing it.
  */
 export function locateBinary(name: BinaryName, hint?: string): string | null {
+  // The product ships and runs tunnel clients only on supported Windows/Linux hosts. Do not let
+  // an unsupported source run turn an explicit hint, PATH entry, bundled residue or home-folder
+  // executable into accidental platform support.
+  if (process.platform !== 'win32' && process.platform !== 'linux') return null;
   const key = [
     name,
     hint ?? '',

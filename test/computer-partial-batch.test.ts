@@ -77,9 +77,6 @@ vi.mock('../src/main/exec.js', () => ({
 }));
 vi.mock('../src/main/logger.js', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }));
 
-// The child process is mocked, but Darwin still resolves the native host before spawn.
-vi.stubEnv('OCTO_MAOCTO_DESKTOP_HELPER', process.execPath);
-
 import { act } from '../src/main/computer/index.js';
 
 describe('desktop partial batch result', () => {

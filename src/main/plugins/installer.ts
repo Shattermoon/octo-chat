@@ -26,10 +26,9 @@ export function pluginEnvironment(inherited = getDefaultEnvironment(), platform 
     return env;
   }
   // Desktop launchers do not inherit interactive shell setup. Keep the inherited path
-  // first, then the standard Node/Homebrew and uv user-install locations. Never execute
+  // first, then the standard Node and uv user-install locations. Never execute
   // shell startup files or copy the application's wider secret-bearing environment.
   const directories = (envValue(env, 'PATH') ?? '').split(':').filter(Boolean);
-  if (platform === 'darwin') directories.push('/opt/homebrew/bin');
   directories.push('/usr/local/bin');
   const home = envValue(env, 'HOME');
   if (home) directories.push(path.posix.join(home, '.local', 'bin'));

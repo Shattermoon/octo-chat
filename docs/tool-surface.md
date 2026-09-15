@@ -15,12 +15,11 @@ separate secret tokenized local paths.
 | **Octo Chat Core** | Approved files, patches, terminal, ChatGPT file saving, recorded-session lookup, workers | `read`, `view_image`, `find`, `apply_patch`, `exec_command`, `write_stdin`, `download_artifact`, `session`, `agents` |
 | **Octo Chat Desktop** | **Windows:** screen, windows, mouse/keyboard and clipboard | Window2 methods plus clipboard tools |
 
-The Desktop connector is optional on Windows. Core is the main connector everywhere.
+The Desktop connector is optional on Windows. Core is the main connector on both supported platforms.
 
 On a fresh current config, Core permissions except saving ChatGPT files are enabled, along with
-session recording and multi-agent mode; read-only mode is off. Saving ChatGPT files is opt-in. Windows also enables Desktop permissions. Linux/macOS mask
-Desktop permissions off at runtime while preserving stored choices for a config later reopened on
-Windows. Existing configs keep explicit choices during upgrades; missing legacy permissions are
+session recording and multi-agent mode; read-only mode is off. Saving ChatGPT files is opt-in. Windows also enables Desktop permissions. Linux and unsupported hosts mask
+Desktop permissions off at runtime while preserving stored choices for a config later reopened on Windows. Existing configs keep explicit choices during upgrades; missing legacy permissions are
 not silently widened.
 
 With fresh defaults, Core advertises `read`, `view_image`, `apply_patch`, `exec_command`,
@@ -60,7 +59,7 @@ Directory deletion and arbitrary binary writes are deliberately not hidden patch
 ### `exec_command`
 
 Runs a command in the host's real shell: PowerShell/cmd on Windows and the user's normal POSIX
-shell on macOS/Linux. This permission is **not** confined to approved folders. Long-running
+shell on Linux. This permission is **not** confined to approved folders. Long-running
 commands return an opaque `session_id` that `write_stdin` can continue.
 
 It takes exactly one of `cmd` (a single command) or `cmds` (up to 20 commands run sequentially
@@ -148,31 +147,19 @@ cannot be proven.
 
 ## Desktop tools
 
-This section exists on Windows and macOS. Linux does not advertise or execute these schemas.
+This section exists only on Windows. Linux and unsupported hosts do not advertise or execute native Desktop schemas.
 
-### `observe`
+### Window2 observation tools
 
-Reads desktop state without moving focus: screenshots, windows and snapshot-scoped UI-control
-information. Window capture tries a direct background path first and labels a visible-screen
-fallback when the pixels may be occluded. Screen access is independent from mouse/keyboard
-control.
+`list_windows`, `get_window`, `list_apps` and `get_window_state` read bounded native window/application state. `get_window_state` can return screenshot pixels and optional UI Automation context without activating the target. Observation state is scoped to the exact caller conversation; a separate unattributed observation context cannot authorize input.
 
-### `computer`
+### Window2 input and launch tools
 
-Executes a bounded batch of desktop actions. The current action set is:
-`click_ref`, `set_value`, `click`, `double_click`, `move`, `drag`, `scroll`, `type`, `keypress`,
-`focus`, `wait`, `read_clipboard`, and `write_clipboard`.
+`launch_app`, `click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action` and `activate_window` require Control and exact caller identity. `read_clipboard` and `write_clipboard` have their own capabilities and also require an exact Principal. Multiline `type_text` additionally requires clipboard-write because it publishes text to the clipboard before a targeted paste.
 
-Recent screenshot frames are retained independently; a coordinate action names its frame and
-the helper revalidates target-window geometry immediately before physical input. Semantic refs
-address cached UI Automation or AXUIElement objects from one bounded snapshot and fail stale rather
-than rescanning by a reusable native identity. Batches report completed-step and route evidence, including
-the exact failing index on partial failure. An optional compact `verify` postcondition can wait
-for a foreground window, window open/close, or UI control appearance/disappearance and capture
-the resulting state in the same tool call.
+Recent screenshot frames are retained independently; coordinate actions name the relevant frame and the helper revalidates target-window geometry immediately before physical input. Semantic refs address cached UI Automation objects from one bounded snapshot and fail stale rather than rescanning by a reusable native identity. Native helper generation, frame/ref ownership and focus are rechecked after relevant awaits and immediately before irreversible effects.
 
-Each step is checked against the current screen/control/clipboard permissions. Read-only mode
-can keep observation available while disabling state-changing desktop actions.
+Every operation is checked against current screen/control/clipboard permissions. Read-only mode can keep observation available while disabling state-changing desktop actions.
 
 ## Permission and discovery invariants
 

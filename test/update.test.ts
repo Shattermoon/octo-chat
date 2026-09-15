@@ -136,10 +136,11 @@ describe('which installations update themselves', () => {
    * A `.deb` is the system package manager's file and replacing it needs root. Asking for a
    * password during quit is not something this app does, so that installation is told a new
    * version exists and given the release page - it is not quietly left waiting for a download
-   * that was never going to happen. Same for macOS, where the artifacts ship unsigned.
+   * that was never going to happen.
    */
-  it('leaves a Linux package install and macOS to be updated by hand', async () => {
+  it('leaves a Linux package install to be updated by hand and rejects unsupported targets', async () => {
     expect(stagedArtifact('linux', 'x64', undefined)).toBeNull();
+    expect(stagedArtifact('freebsd', 'arm64')).toBeNull();
     expect(stagedArtifact('darwin', 'arm64')).toBeNull();
     expect(stagedArtifact('win32', 'ia32')).toBeNull();
 

@@ -377,35 +377,6 @@ function paintGroups(): void {
   }
 }
 
-function paintDesktopAccess(next: AppState): void {
-  const box = $('desktopAccess');
-  const access = next.desktopAccess;
-  const needsScreen = next.config.capabilities.screen;
-  const needsAccessibility = next.config.capabilities.control && !next.config.readOnly;
-  if (next.platform?.family !== 'macos' || (!needsScreen && !needsAccessibility) || !access) {
-    box.hidden = true;
-    return;
-  }
-
-  const missing: string[] = [];
-  if (needsScreen && access.screen !== 'granted') missing.push(t("Screen Recording: {0}", [access.screen]));
-  if (needsAccessibility && access.accessibility !== 'granted') {
-    missing.push(t("Accessibility: {0}", [access.accessibility]));
-  }
-  box.hidden = missing.length === 0;
-  if (box.hidden) return;
-
-  ui($('desktopAccessTitle'), 'textContent', () => t("Desktop access needs attention"));
-  ui($('desktopAccessDetail'), 'textContent', () => t("{0}. These are live verdicts from the native backend executing inside Octo Chat. ", [missing.join(' · ')]) +
-    t("Grant the missing macOS permission, then fully quit and reopen the app."));
-  $<HTMLButtonElement>('openDesktopScreen').hidden =
-    !needsScreen || access.screen === 'granted';
-  $<HTMLButtonElement>('openDesktopAccessibility').hidden =
-    !needsAccessibility || access.accessibility === 'granted';
-  $<HTMLButtonElement>('requestDesktopAccessibility').hidden =
-    !needsAccessibility || access.accessibility === 'granted';
-}
-
 /**
  * How many MCP tools this app can expose in total, across both connectors.
  *
@@ -791,7 +762,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   let tone: UpdateTone = 'work';
   if (update.latest) {
     // `latest` set with a stage of `idle` is the deliberate case: a new version exists and this
-    // installation - a Linux .deb, macOS, a development tree, an architecture with no artifact -
+    // installation - a Linux .deb, a development tree, or an unsupported target -
     // is not one the app can update by itself. That is when the button matters.
     lines.push(
       update.stage === 'checking'
@@ -1009,7 +980,6 @@ function apply(next: AppState): void {
     previousState?.config.sessions.record
   );
   paintGroups();
-  paintDesktopAccess(next);
 
   // ---- folders
   paintRoots(config.roots);
@@ -1056,13 +1026,8 @@ function apply(next: AppState): void {
     previousState?.config.ui.privacyScreenshots
   );
   $('privacyScreenshotsSetting').hidden = !(next.platform?.desktopAutomation ?? true);
-  if (next.platform?.family === 'macos') {
-    ui($('backgroundRunningCopy'), 'textContent', () => t("Leave it running while you use the connector. It stays available from the menu bar and Dock when you close the window."));
-    ui($('minimizeToTrayCopy'), 'textContent', () => t("Hide the window to the menu bar when closed"));
-  } else {
-    ui($('backgroundRunningCopy'), 'textContent', () => t("Leave it running while you use the connector. It stays in the tray when you close the window."));
-    ui($('minimizeToTrayCopy'), 'textContent', () => t("Keep running in the tray when closed"));
-  }
+  ui($('backgroundRunningCopy'), 'textContent', () => t("Leave it running while you use the connector. It stays in the tray when you close the window."));
+  ui($('minimizeToTrayCopy'), 'textContent', () => t("Keep running in the tray when closed"));
 
   const openai = config.tunnel.kind === 'openai';
   const browserRequired = browserExtensionRequired(config);
@@ -1617,16 +1582,6 @@ async function runChecks(): Promise<void> {
 }
 
 $('runChecks').addEventListener('click', () => void runChecks());
-$('requestDesktopAccessibility').addEventListener('click', async () => {
-  const button = $<HTMLButtonElement>('requestDesktopAccessibility');
-  button.disabled = true;
-  try {
-    const next = await run(api.requestDesktopAccessibility());
-    if (next) apply(next);
-  } finally {
-    button.disabled = false;
-  }
-});
 $('closeChecks').addEventListener('click', () => {
   $('checksBox').hidden = true;
 });

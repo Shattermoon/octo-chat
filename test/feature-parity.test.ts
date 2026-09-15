@@ -5,7 +5,7 @@ import { surfaceDefinition, surfaceIsUseful } from '../src/main/mcp/surfaces.js'
 import { browserExtensionRequired } from '../src/shared/types.js';
 
 describe('portable browser-backed feature parity', () => {
-  it.each(['win32', 'darwin', 'linux'] as const)(
+  it.each(['win32', 'linux'] as const)(
     'keeps sessions, compaction, Goal and multi-agent policy platform-invariant on %s',
     (platform) => {
       const config = defaultConfig(platform);
@@ -30,7 +30,7 @@ describe('portable browser-backed feature parity', () => {
   );
 
   it('keeps the bridge required for either independently viable browser feature', () => {
-    const config = defaultConfig('darwin');
+    const config = defaultConfig('linux');
 
     expect(
       browserExtensionRequired({
@@ -52,11 +52,9 @@ describe('portable browser-backed feature parity', () => {
     ).toBe(false);
   });
 
-  it('ships the complete Core/browser product plus native Desktop automation on macOS', () => {
-    // Model the oldest supported Desktop host explicitly. The real-host projection is
-    // intentionally false on macOS 12.0-12.2, and this policy test must not depend on the
-    // Darwin release of the machine running Vitest.
-    const config = defaultConfig('darwin', '21.4.0');
+  it('ships the complete Core/browser product on supported hosts and Desktop only on Windows', () => {
+    const linux = defaultConfig('linux');
+    const windows = defaultConfig('win32');
     expect(surfaceDefinition('core').tools).toEqual([
       'read',
       'view_image',
@@ -71,11 +69,9 @@ describe('portable browser-backed feature parity', () => {
       'session_finish',
       'exec'
     ]);
-    expect(surfaceIsUseful('core', config.capabilities, 'darwin')).toBe(true);
-    // macOS source remains in the tree, but the current supported runtime masks Desktop there.
-    expect(surfaceIsUseful('desktop', config.capabilities, 'darwin')).toBe(false);
-    const switchedOn = { ...config.capabilities, screen: true, control: true };
-    expect(surfaceIsUseful('desktop', switchedOn, 'darwin', '21.4.0')).toBe(false);
+    expect(surfaceIsUseful('core', linux.capabilities, 'linux')).toBe(true);
+    expect(surfaceIsUseful('desktop', linux.capabilities, 'linux')).toBe(false);
+    expect(surfaceIsUseful('desktop', windows.capabilities, 'win32')).toBe(true);
 
     const manifest = JSON.parse(
       readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8')

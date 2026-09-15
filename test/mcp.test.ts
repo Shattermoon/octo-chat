@@ -690,7 +690,7 @@ describe('surface boundaries', () => {
   it('advertises exactly Desktop’s tools on Desktop, with nothing from Core', async () => {
     everything();
     const names = toolNames(await desktop('tools/list'));
-    expect(names).toEqual(IS_WINDOWS ? [...WINDOWS_COMPUTER_METHODS, 'read_clipboard', 'write_clipboard', 'exec'].sort() : ['computer', 'exec', 'observe']);
+    expect(names).toEqual(IS_WINDOWS ? [...WINDOWS_COMPUTER_METHODS, 'read_clipboard', 'write_clipboard', 'exec'].sort() : []);
     for (const name of surfaceDefinition('core').tools.filter(name => name !== 'exec')) expect(names, name).not.toContain(name);
   });
 
@@ -699,7 +699,7 @@ describe('surface boundaries', () => {
     // snapshot, because ChatGPT caches these two connectors independently.
     ctx.readOnly = false;
     ctx.caps = withCaps({ search: true, screen: true });
-    expect(toolNames(await desktop('tools/list'))).toEqual(IS_WINDOWS ? [...WINDOWS_COMPUTER_READ_METHODS, 'exec'].sort() : ['exec', 'observe']);
+    expect(toolNames(await desktop('tools/list'))).toEqual(IS_WINDOWS ? [...WINDOWS_COMPUTER_READ_METHODS, 'exec'].sort() : []);
 
     // Before Core's first discovery the user enables command execution. Core should make
     // its one-time find-vs-exec choice from *this* state, not the state Desktop happened to
@@ -805,7 +805,7 @@ describe('surface boundaries', () => {
 
     // Each populated surface includes code mode; find and the shell exec pair remain exclusive.
     expect(coreTools).toHaveLength(10);
-    expect(desktopTools).toHaveLength(IS_WINDOWS ? 16 : 3);
+    expect(desktopTools).toHaveLength(IS_WINDOWS ? 16 : 0);
 
     // And the size, which is what a discovery pull actually costs the model on every
     // conversation that touches the connector. The ceilings sit just above what the
@@ -832,9 +832,6 @@ describe('surface boundaries', () => {
         IS_WINDOWS && desktopTools.includes(tool)
           // Largest Window2 method is click at 882 bytes; composition is 1458 bytes.
           ? (tool.name === 'exec' ? 1_500 : 950)
-          : tool.name === 'computer'
-          // Retain the existing legacy schema allowance on macOS.
-          ? 7_400
           : tool.name === 'apply_patch'
             ? 5_000
             : tool.name === 'agents'
@@ -935,7 +932,7 @@ describe('2025-era clients', () => {
       capabilities: {},
       clientInfo: { name: 'test-client', version: '1.0.0' }
     });
-    if (IS_WINDOWS || process.platform === 'darwin') {
+    if (IS_WINDOWS) {
       expect(coreReply.body.result.instructions).toContain(surfaceDefinition('desktop').connectorName);
     } else {
       expect(coreReply.body.result.instructions).not.toContain(surfaceDefinition('desktop').connectorName);
@@ -951,9 +948,8 @@ describe('2025-era clients', () => {
       expect(desktopReply.body.result.instructions).toContain('get_window_state');
       expect(desktopReply.body.result.instructions).toContain('sky');
     } else {
-      expect(desktopReply.body.result.instructions).toContain('observe');
-      expect(desktopReply.body.result.instructions).toContain('Do not poll with a batch that only waits');
-      expect(desktopReply.body.result.instructions).toContain('verify');
+      expect(desktopReply.body.result.instructions).toContain('supported only on Windows');
+      expect(desktopReply.body.result.instructions).not.toContain('observe');
     }
   });
 
@@ -1579,15 +1575,21 @@ describe('desktop capabilities', () => {
     expect(toolNames(await desktop('tools/list'))).toEqual([]);
   });
 
-  it('offers looking at the screen without offering control of it', async () => {
+  it.skipIf(!IS_WINDOWS)('offers looking at the screen without offering control of it', async () => {
     ctx.caps = withCaps({ screen: true });
     const names = toolNames(await desktop('tools/list'));
-    expect(names).toEqual(IS_WINDOWS ? [...WINDOWS_COMPUTER_READ_METHODS, 'exec'].sort() : ['exec', 'observe']);
+    expect(names).toEqual([...WINDOWS_COMPUTER_READ_METHODS, 'exec'].sort());
+  });
+
+  it.skipIf(IS_WINDOWS)('publishes no Desktop tools on unsupported hosts even when stored capabilities are enabled', async () => {
+    ctx.readOnly = false;
+    ctx.caps = withCaps({ screen: true, control: true, clipboardRead: true, clipboardWrite: true });
+    expect(toolNames(await desktop('tools/list'))).toEqual([]);
   });
 
   // Seeing the screen changes nothing, so it survives read-only mode; driving the
   // mouse and keyboard can do anything the user can, so it must not.
-  it('keeps seeing but not touching in read-only mode', async () => {
+  it.skipIf(!IS_WINDOWS)('keeps seeing but not touching in read-only mode', async () => {
     // Exercise the read-only capability split on a platform with a native Desktop backend rather
     // than making the result depend on the CI host.
     const config = { ...defaultConfig('win32'), capabilities: withCaps({ screen: true, control: true }) };
@@ -1596,14 +1598,14 @@ describe('desktop capabilities', () => {
     ctx.caps = effectiveCapabilities({ ...config, readOnly: true }, 'win32');
     expect(ctx.caps.screen).toBe(true);
     expect(ctx.caps.control).toBe(false);
-    expect(toolNames(await desktop('tools/list'))).toEqual(IS_WINDOWS ? [...WINDOWS_COMPUTER_READ_METHODS, 'exec'].sort() : ['exec', 'observe']);
+    expect(toolNames(await desktop('tools/list'))).toEqual([...WINDOWS_COMPUTER_READ_METHODS, 'exec'].sort());
 
     ctx.readOnly = false;
     ctx.caps = effectiveCapabilities({ ...config, readOnly: false }, 'win32');
-    expect(toolNames(await desktop('tools/list'))).toContain(IS_WINDOWS ? 'click' : 'computer');
+    expect(toolNames(await desktop('tools/list'))).toContain('click');
   });
 
-  it('offers clipboard access alone and refuses operations whose permission is revoked', async () => {
+  it.skipIf(!IS_WINDOWS)('offers clipboard access alone and refuses operations whose permission is revoked', async () => {
     ctx.readOnly = false;
     // Publish the schema once, then exercise live revocation on the same endpoint.
     ctx.caps = withCaps({ screen: true, control: true, clipboardRead: true, clipboardWrite: true });
@@ -1611,32 +1613,32 @@ describe('desktop capabilities', () => {
     ctx.caps = withCaps({ control: false, clipboardRead: true, clipboardWrite: false });
 
     const clicked = await desktop('tools/call', {
-      name: IS_WINDOWS ? 'click' : 'computer',
-      arguments: IS_WINDOWS ? { window: { app: 'fixture.exe', id: 1 }, x: 5, y: 5 } : { actions: [{ type: 'click', x: 5, y: 5 }] }
+      name: 'click',
+      arguments: { window: { app: 'fixture.exe', id: 1 }, x: 5, y: 5 }
     });
     expect(clicked.body.result?.isError).toBe(true);
-    expect(textOf(clicked)).toContain(IS_WINDOWS ? 'TOOL_DISABLED' : 'mouse and keyboard control is disabled');
+    expect(textOf(clicked)).toContain('TOOL_DISABLED');
 
     const written = await desktop('tools/call', {
-      name: IS_WINDOWS ? 'write_clipboard' : 'computer',
-      arguments: IS_WINDOWS ? { text: 'nope' } : { actions: [{ type: 'write_clipboard', text: 'nope' }] }
+      name: 'write_clipboard',
+      arguments: { text: 'nope' }
     });
     expect(written.body.result?.isError).toBe(true);
-    expect(textOf(written)).toContain(IS_WINDOWS ? 'TOOL_DISABLED' : 'Replace clipboard text permission');
+    expect(textOf(written)).toContain('TOOL_DISABLED');
   });
 
-  it('publishes only the clipboard read tool and composition with clipboard-read permission alone', async () => {
+  it.skipIf(!IS_WINDOWS)('publishes only the clipboard read tool and composition with clipboard-read permission alone', async () => {
     ctx.readOnly = false;
     ctx.caps = withCaps({ clipboardRead: true });
-    expect(toolNames(await desktop('tools/list'))).toEqual(IS_WINDOWS ? ['exec', 'read_clipboard'] : ['computer', 'exec']);
+    expect(toolNames(await desktop('tools/list'))).toEqual(['exec', 'read_clipboard']);
   });
 
-  it('marks observing read-only and control destructive', async () => {
+  it.skipIf(!IS_WINDOWS)('marks observing read-only and control destructive', async () => {
     ctx.caps = withCaps({ screen: true, control: true });
     ctx.readOnly = false;
     const tools = toolList(await desktop('tools/list'));
-    const observe = tools.find((t) => t.name === (IS_WINDOWS ? 'get_window_state' : 'observe'));
-    const computer = tools.find((t) => t.name === (IS_WINDOWS ? 'click' : 'computer'));
+    const observe = tools.find((t) => t.name === 'get_window_state');
+    const computer = tools.find((t) => t.name === 'click');
     expect(observe?.annotations?.readOnlyHint).toBe(true);
     expect(computer?.annotations?.readOnlyHint).toBe(false);
     expect(computer?.annotations?.destructiveHint).toBe(true);
@@ -1702,100 +1704,6 @@ describe('desktop capabilities', () => {
     expect(textOf(revoked)).toContain('TOOL_DISABLED');
   });
 
-  it.skipIf(process.platform !== 'darwin')('carries the clipboard actions in the computer schema rather than as tools of their own', async () => {
-    ctx.caps = withCaps({ screen: true, control: true, clipboardRead: true, clipboardWrite: true });
-    ctx.readOnly = false;
-    const schema = JSON.stringify(toolList(await desktop('tools/list')).find((t) => t.name === 'computer'));
-    expect(schema).toContain('read_clipboard');
-    expect(schema).toContain('write_clipboard');
-    expect(schema).toContain('command+v on macOS');
-    expect(schema).toContain('ctrl+v on Windows/Linux');
-  });
-
-  it.skipIf(process.platform !== 'darwin')('rejects a malformed action before it reaches the desktop', async () => {
-    ctx.caps = withCaps({ screen: true, control: true });
-    ctx.readOnly = false;
-    // No coordinates, so there is nothing to click; this must fail as a tool error
-    // rather than being passed on to the helper.
-    const reply = await desktop('tools/call', {
-      name: 'computer',
-      arguments: { actions: [{ type: 'click' }] }
-    });
-    expect(failed(reply)).toBe(true);
-  });
-
-  it.skipIf(process.platform !== 'darwin')('rejects unknown fields inside a desktop action instead of silently dropping them', async () => {
-    ctx.caps = withCaps({ control: true });
-    ctx.readOnly = false;
-    const reply = await desktop('tools/call', {
-      name: 'computer',
-      arguments: { actions: [{ type: 'wait', ms: 0, typo_that_must_not_be_ignored: true }] }
-    });
-    expect(failed(reply)).toBe(true);
-  });
-
-  it.skipIf(process.platform !== 'darwin')('rejects capture options that would otherwise be silently ignored', async () => {
-    ctx.caps = withCaps({ control: true, screen: true });
-    ctx.readOnly = false;
-    const withoutCapture = await desktop('tools/call', {
-      name: 'computer',
-      arguments: { actions: [{ type: 'wait', ms: 0 }], captureWindow: 123 }
-    });
-    expect(failed(withoutCapture)).toBe(true);
-
-    const conflictingTargets = await desktop('tools/call', {
-      name: 'computer',
-      arguments: {
-        actions: [{ type: 'wait', ms: 0 }],
-        captureAfter: true,
-        captureWindow: 123,
-        captureFull: true
-      }
-    });
-    expect(failed(conflictingTargets)).toBe(true);
-  });
-
-  it.skipIf(process.platform !== 'darwin')('validates compact computer postconditions and keeps screen permission live', async () => {
-    ctx.caps = withCaps({ control: true, screen: true });
-    ctx.readOnly = false;
-    const malformed = await desktop('tools/call', {
-      name: 'computer',
-      arguments: { actions: [{ type: 'wait', ms: 0 }], verify: { until: 'foreground' } }
-    });
-    expect(failed(malformed)).toBe(true);
-
-    ctx.caps = withCaps({ control: true, screen: false });
-    const disabled = await desktop('tools/call', {
-      name: 'computer',
-      arguments: {
-        actions: [{ type: 'wait', ms: 0 }],
-        verify: { until: 'foreground', window: 123, timeout_ms: 0 }
-      }
-    });
-    expect(failed(disabled)).toBe(true);
-    expect(textOf(disabled)).toContain('See the screen');
-  });
-
-  it.skipIf(process.platform !== 'darwin')('rejects observe options whose selected view would silently ignore them', async () => {
-    ctx.caps = withCaps({ screen: true });
-    const strayTimeout = await desktop('tools/call', {
-      name: 'observe',
-      arguments: { timeout_ms: 100 }
-    });
-    expect(failed(strayTimeout)).toBe(true);
-
-    const unusedMatch = await desktop('tools/call', {
-      name: 'observe',
-      arguments: { what: 'active', match: 'Notepad' }
-    });
-    expect(failed(unusedMatch)).toBe(true);
-
-    const impossibleShot = await desktop('tools/call', {
-      name: 'observe',
-      arguments: { what: 'ui', screenshot: true }
-    });
-    expect(failed(impossibleShot)).toBe(true);
-  });
 });
 
 describe('tool annotations', () => {

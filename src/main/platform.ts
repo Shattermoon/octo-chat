@@ -9,12 +9,9 @@ export function desktopAutomationSupported(
 
 export function hostPlatformInfo(
   platform: NodeJS.Platform = process.platform,
-  release?: string
+  _release?: string
 ): PlatformInfo {
   if (platform === 'win32') return { family: 'windows', name: 'Windows', desktopAutomation: true };
-  if (platform === 'darwin') {
-    return { family: 'macos', name: 'macOS', desktopAutomation: desktopAutomationSupported(platform, release) };
-  }
   if (platform === 'linux') return { family: 'linux', name: 'Linux', desktopAutomation: false };
   return { family: 'other', name: platform, desktopAutomation: false };
 }

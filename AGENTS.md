@@ -27,8 +27,8 @@ bridge protocol **14** in the checked declarations (`package.json`, `src/main/ve
 
 ## 1. What the whole app is meant to do
 
-Octo Chat is a Windows/Linux Electron workspace around ChatGPT. macOS source remains in the tree
-for now, but current CI, packaging and public support are paused. The user can work
+Octo Chat is a Windows/Linux Electron workspace around ChatGPT. macOS is not a supported build,
+runtime or packaging target. The user can work
 from the desktop app while ChatGPT generates answers in its own browser conversation. The app
 sends instructions, records the conversation, supplies local tools over MCP, and coordinates
 long-running work. The companion extension connects that browser conversation to the local
@@ -195,7 +195,7 @@ define the tool/config/wire contract. README and worklogs are secondary and can 
 | Unattributed allowance | True on first launch. | Relaxes ambiguity fences only; known blocked/retired/superseded ownership stays enforced. |
 | Recover ordinary/agent tabs | Off. | Goal/Loop can independently justify recovery; history alone cannot. |
 | Goal / Loop | Off, preferred mode Goal. Both decision backends default to ChatGPT, helper `gpt-5.6-sol` High. | API uses the configured OpenRouter/custom endpoint and stored model. These defaults are not account-availability proof. |
-| Desktop | Windows on; Linux/macOS unavailable in the current supported release contract. | Unsupported platforms mask live capabilities without erasing stored choices. |
+| Desktop | Windows on; Linux and unsupported hosts unavailable. | Unsupported platforms mask live capabilities without erasing stored choices. |
 | Shell/UI | Dark theme, minimize to tray, no automatic connector connection/login startup by default. | Optional browser/finish/plan choices are resolved by current config and their consumer, not invented from absent fields. |
 | Plugin auto-refresh | Off. | Local status/discovery never claims ChatGPT refreshed its connector snapshot. |
 | Background chats | On. | Omitted legacy settings use On; explicit saved On/Off remains exact. Cold Windows startup requests a minimized browser window. |
@@ -235,7 +235,7 @@ Paths in this section are repository-relative. Most mechanisms have `main`, `sha
 | Models/usage | `src/main/chat-models.ts`, `session/usage.ts`; `src/shared/{chat-models,usage}.ts`; `src/renderer/{chat-models,context-meter,usage}.ts`: account observations vs local estimates. |
 | External plugins | `src/main/plugins/{catalog,installer,manager,exposure,oauth}.ts`, `plugins-ipc.ts`, `plugin-refresh.ts`, `src/shared/{plugins,plugin-refresh}.ts`, `src/renderer/plugins.ts`. |
 | Renderer boundary | `src/main/ipc.ts`, `edit-context-menu.ts`, `src/preload/index.ts`; `src/renderer/{main,chat,dom,tool-result,timeline-scroll,sidebar-resize,browser-preferences,i18n}.ts`, `locales/zh-CN.json`, `index.html`, `styles.css`. |
-| Native Desktop | `src/main/computer/{index,helper,browser-chords,windows-api,windows-capture,windows-apps,windows-keys}.ts`, `src/shared/windows-computer.ts`, `mcp/tools-desktop-{windows,macos}.ts`, `native/macos-desktop-helper/*`, `native/macos-desktop-addon/*`. |
+| Native Desktop | `src/main/computer/{index,helper,browser-chords,windows-api,windows-capture,windows-apps,windows-keys}.ts`, `src/shared/windows-computer.ts`, `mcp/tools-desktop-windows.ts`. |
 | Delivery/build | `src/main/{update,extension-path,version,logger,durable}.ts`, `electron.vite.config.ts`, `electron-builder.yml`, `scripts/*`, `.github/workflows/*`, `vitest.config.ts`. |
 
 ### One durable fact, one authoritative owner
@@ -267,7 +267,7 @@ leaving an invisible process, tool, writer or installer competing with the next 
 
 The single-instance lock must be won before touching shared userData. The losing process marks
 itself quitting immediately; `app.quit()` alone does not stop module evaluation. Activation from
-second-instance/tray/Dock is gated until restore, CSP, permissions and IPC are ready. Once quit
+second-instance/tray activation is gated until restore, CSP, permissions and IPC are ready. Once quit
 begins, no delayed startup callback may re-enable window creation.
 
 Startup initializes config/secrets/session/durable paths, restores the saved model catalog and
@@ -330,8 +330,7 @@ create/edit/move/delete permission; command controls both terminal tools; downlo
 `saveArtifact`. Recording controls `session` and `update_plan`; multi-agent controls `agents`;
 the finish setting controls `session_finish`. Windows publishes four observation methods under
 screen access, nine input/launch methods under control, and clipboard methods under their own
-permissions. Multiline `type_text` additionally requires clipboard write. macOS `computer`
-registration can exist for control or clipboard access; each action rechecks its own permission.
+permissions. Multiline `type_text` additionally requires clipboard write.
 
 ChatGPT may cache one surface's complete tool list. Core/Desktop exposure is monotonic for an
 endpoint lifetime: a previously exposed schema can remain while a revoked handler returns
@@ -1776,16 +1775,15 @@ and MCP connection have separate lifecycles.
 
 ### Native Desktop
 
-Desktop is available only on Windows in the current supported release contract. Linux and macOS
-remove it from live discovery/enforcement while preserving stored preferences. Windows uses the
-bounded PowerShell/Win32/UIA helper. Retained macOS source is legacy/paused implementation, not a
-currently packaged or supported Desktop surface.
+Desktop is available only on Windows in the current supported release contract. Linux and
+unsupported hosts remove it from live discovery/enforcement while preserving stored preferences.
+Windows uses the bounded PowerShell/Win32/UIA helper.
 
 `computer/index.ts` owns native actions, capture frames/accessibility refs, batching and
 postconditions. Registrars own live capability checks. Windows `windows-api.ts` implements the
 13 Window2 methods: `list_windows`, `get_window`, `list_apps`, `launch_app`, `get_window_state`,
 `click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`,
-`activate_window`. The old `observe`/`computer` wrapper is macOS-only. Windows observation state
+`activate_window`. The old `observe`/`computer` wrapper is removed. Windows observation state
 is bounded per exact caller or a separate shared unattributed context when observation is allowed,
 and contains no pixels/text. Desktop input still requires an exact Principal: it consumes only
 that Principal's indexes/geometry and never the shared unattributed context. Identified and
@@ -1793,7 +1791,7 @@ unattributed observations never borrow each other's state, and unattributed obse
 authorize follow-up indexed/coordinate input regardless of `allowUnattributedCalls`.
 Explicit activation consumes observation state too; ordinary input already activates its target.
 Late observations and replaced principals cannot lend another call their state.
-Observe → act uses exact frame/ref, target geometry and
+Observation → act uses exact frame/ref, target geometry and
 helper generation. Recheck those after asynchronous image work and before every local action
 in a batch. A replaced helper/window/display invalidates old coordinates and refs. Bound
 decoded images, report actual visible crops, and never label a visible screen crop as a hidden
@@ -1881,7 +1879,7 @@ the whole run replaying one long workflow; avoid optimizing speculative edge cas
 | Lost compaction or Goal debt | continuation/goal → store → bridge | `continuation`, `resume`, `goal*`, `session-finish` |
 | Transcript order, UI clobber, usage | store/chronology → IPC → renderer | `session`, `chronology`, `renderer-*`, `timeline-scroll`, `session-usage`, `usage-observer` |
 | Files/patch/output/code-mode | concrete tool owner → kernel serialization | `codex-*`, `exec-*`, `code-mode-*`, `mcp-tool-declarations`, `artifact-download` |
-| Plugins/auth/native Desktop | manager/exposure/OAuth or computer frame owner | `plugins-*`, `computer*`, `tools-desktop-*`, `macos-*` |
+| Plugins/auth/native Desktop | manager/exposure/OAuth or computer frame owner | `plugins-*`, `computer*`, `tools-desktop-*` |
 | Startup/connection/shipping | lifecycle/config/connection or packaging script | `config`, `window-*`, `shutdown`, `tunnel*`, `packaging`, `update`, `third-party-notices` |
 
 Discover current suites with `rg --files test`; do not maintain a stale suite count. Validate
@@ -1906,7 +1904,7 @@ cleanup of this shared tree. `verify:ci` fetches rg, checks privacy/notices/nati
 typechecks, verifies Electron resolves, runs Vitest excluding `mcp-shutdown`, then runs that
 socket-drain suite alone. `vitest.config.ts` forces Node, bounded hooks/tests, `CLF_BRIDGE_PORTS=0`
 and test-only `CLF_EVIDENCE_MS=1500`; never let tests contact the installed production bridge.
-Opt-in live plugin and legacy macOS probes are separate evidence, not implied by the ordinary suite.
+Opt-in live plugin probes are separate evidence, not implied by the ordinary suite.
 
 When delegation is authorized, reuse a suitable worker. Give each assignment the project,
 concrete task, evidence, allowed files, ownership boundaries, checks and expected handoff.
@@ -1941,8 +1939,7 @@ Record changes and actual checks in a focused worklog. Keep security reproductio
 session material out of public docs and fixtures; follow `SECURITY.md`. Do not package, install,
 commit or publish merely because a source/documentation task was requested.
 
-Runtime data is under Electron userData: `%APPDATA%/octo-chat` on Windows,
-`~/Library/Application Support/octo-chat` on macOS and the XDG config location on Linux.
+Runtime data is under Electron userData: `%APPDATA%/octo-chat` on Windows and the XDG config location on Linux.
 Inspect exact session/state files (§4), never edit live ledgers as a repair shortcut. `logger.ts`
 keeps a redacted 500-entry ring and bounded async `app.log` batches with rotation, explicit
 overload omissions, a two-second final flush and separate `.crash` snapshot. Logs are human
@@ -1952,8 +1949,7 @@ diagnostics, not restart authority; secrets must never be printed to investigate
 
 Source, bundle, package, installed bytes and live behavior are separate gates (§3). The app id
 is `com.octochat.app`. Current native release targets are Windows x64/arm64 NSIS and Linux
-x64/arm64 AppImage+DEB. macOS publication is paused; remaining macOS source/build helpers are
-legacy cleanup scope rather than a supported release target. Windows is per-user-capable and
+x64/arm64 AppImage+DEB. macOS is not a release target. Windows is per-user-capable and
 `asInvoker`; replacing the package preserves userData. Synchronize package/main/extension versions deliberately.
 
 `electron-vite` builds main/preload/renderer into `out/`; extension files ship directly without
@@ -1973,8 +1969,7 @@ upstream binaries while retaining that distribution's checksum or notices.
 | `scripts/package.mjs` | Icons → bundle → explicit target resources/native staging → builder with publishing disabled. |
 | `packaging-targets.mjs`, `packaging-versions.mjs` | Supported OS/arch vocabulary and pinned target checksums; fetchers share these authorities. |
 | `prepare-packaging-native.mjs` | Exact target node-pty/Sharp/tree-sitter from verified package material; host leftovers cannot win. |
-| `prepare-macos-desktop-helper.mjs` | Thin target Swift dylib + matching N-API addon; packaged in-process permission identity. |
-| `smoke-packaged-runtime.mjs`, `smoke-macos-{bundle,gui}.mjs` | In-place resource/native-stack checks, Mac bundle/seal and real GUI startup evidence. |
+| `smoke-packaged-runtime.mjs` | In-place supported-target resource/native-stack checks. |
 | `generate-third-party-notices.mjs`, `package-native-sources.mjs` | Production notices and corresponding native source inventory/archive; exact lockfile/catalog provenance. |
 | `verify-public-history.mjs`, `check-release-absent.mjs` | Public-history/privacy gate and positive proof that publishing will not overwrite a release. |
 

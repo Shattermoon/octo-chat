@@ -3,10 +3,9 @@
  *
  * Pure and host-agnostic on purpose: the desktop tool decides which window the keys would
  * reach; this only says whether the chord is one a browser takes for itself, and whether a
- * process is a browser. The chord list is Chrome's, which Edge, Brave, Safari and the rest
- * share, in both its Windows/Linux (ctrl/alt) and its macOS (command/option) spelling. Both
- * spellings are refused on every host: the model's key names decide, not the host, and a
- * ctrl+tab still switches tabs in a Mac browser.
+ * process is a browser. The chord list covers the ctrl/alt spellings used on supported hosts and
+ * command/option aliases a model can still name. Both spellings are refused: the model's key
+ * names decide, not the host.
  */
 
 const MODIFIERS = new Set(['ctrl', 'shift', 'alt', 'cmd']);
@@ -72,7 +71,7 @@ const BROWSER_TAB_CHORDS = new Set([
   'alt+right',
   'alt+home',
   ...Array.from({ length: 9 }, (_, index) => `ctrl+${index + 1}`),
-  // macOS — close/quit/hide, new tab/window, switch tab, history
+  // Command-key aliases — still refuse browser/tab management if a model names them.
   'cmd+w',
   'cmd+shift+w',
   'cmd+q',
@@ -92,8 +91,8 @@ const BROWSER_TAB_CHORDS = new Set([
 ]);
 
 /**
- * Process names as Windows reports them (image name, `.exe` stripped) and as macOS reports them
- * (the window owner's application name: "Google Chrome", "Brave Browser", "Safari").
+ * Common browser process/application names. Keep aliases broad so a renamed/portable browser does
+ * not turn tab-management chords into ordinary page input.
  */
 export const BROWSER_PROCESS_PATTERN =
   /(^|[\s_-])(chrome|chromium|msedge|edge|firefox|brave|opera|vivaldi|arc|safari)([\s_-]|$)/;

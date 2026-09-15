@@ -29,13 +29,9 @@ export const INTERRUPT = String.fromCharCode(3);
  * deterministic and pager-free rather than to sandbox anything.
  */
 export function unifiedExecEnvForPlatform(
-  platform: NodeJS.Platform = process.platform
+  _platform: NodeJS.Platform = process.platform
 ): ReadonlyArray<readonly [string, string]> {
-  // Ubuntu provides C.UTF-8 and Codex uses it, but macOS' standard UTF-8 locale is
-  // en_US.UTF-8. Forcing a locale name the host does not provide makes shells/native tools
-  // emit setlocale warnings before the command's own output. Keep the deterministic UTF-8
-  // contract while spelling it in the host's normal dialect.
-  const utf8Locale = platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8';
+  const utf8Locale = 'C.UTF-8';
   return [
   ['NO_COLOR', '1'],
   ['TERM', 'dumb'],

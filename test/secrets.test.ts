@@ -83,10 +83,9 @@ describe('secret store', () => {
     const v11 = Buffer.from('v11ciphertext', 'ascii');
     expect(secureStorageCiphertextIsProtected(v10, 'linux')).toBe(false);
     expect(secureStorageCiphertextIsProtected(v11, 'linux')).toBe(true);
-    // v10 is a platform-specific on-disk format distinction; do not reinterpret bytes from
-    // DPAPI/Keychain hosts as Linux basic_text merely because their prefix happens to match.
+    // v10 is a platform-specific on-disk format distinction; do not reinterpret DPAPI bytes as
+    // Linux basic_text merely because their prefix happens to match.
     expect(secureStorageCiphertextIsProtected(v10, 'win32')).toBe(true);
-    expect(secureStorageCiphertextIsProtected(v10, 'darwin')).toBe(true);
   });
 
   it('serializes concurrent writes so one credential cannot erase another', async () => {
