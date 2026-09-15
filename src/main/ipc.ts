@@ -96,17 +96,6 @@ import { forgetWorkspaceRoot, renameWorkspaceRoot } from './workspace.js';
 import { hostPlatformInfo } from './platform.js';
 import { openInPreferredBrowser } from './browser.js';
 import { markInstallOnQuit, onUpdateChange, updateStatus } from './update.js';
-import {
-  getMacOSDesktopAccess,
-  onMacOSDesktopAccessChange,
-  refreshMacOSDesktopAccess
-} from './computer/index.js';
-
-/** Fixed native Settings destinations; authored chat links use the shared web/mail policy. */
-const ALLOWED_LINKS = new Set([
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
-]);
 
 const capabilityPatch = z.object(
   Object.fromEntries(CAPABILITIES.map((c) => [c, z.boolean()])) as Record<
@@ -368,8 +357,7 @@ async function buildState(): Promise<AppState> {
     resolvedBinary: resolvedBinary(config),
     bundledTunnelVersion: bundledVersion(),
     bridge: await bridgeStatus(),
-    update: updateStatus(),
-    desktopAccess: getMacOSDesktopAccess()
+    update: updateStatus()
   };
 }
 
@@ -434,14 +422,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       else if ((previous.goal.impulseMinutes ?? 0) > 0 && !published.goal.impulseMinutes) await cancelFinishInputs(true);
     });
     // Renderer palette changes are immediate, so keep OS/Electron-owned chrome in lock-step too.
-    // Without this, selecting Dark on macOS left the title bar, menus and file picker in the
-    // system theme until restart (and startup still defaulted to system before index.ts applies it).
     nativeTheme.themeSource = next.ui.theme;
     if (process.platform === 'win32') getWindow()?.setTitleBarOverlay(titleBarOverlayForTheme(next.ui.theme));
     // BrowserWindow's native backing color is fixed at construction unless updated explicitly.
-    // Keep it in lock-step too: the default macOS application menu exposes Reload, and after a
-    // live theme switch an old opposite background otherwise flashes behind the renderer while it
-    // paints again. This is also the color Electron shows during any later renderer reload/failure.
+    // Keep it in lock-step so an old opposite background does not flash behind the renderer on a
+    // later reload/failure.
     getWindow()?.setBackgroundColor(next.ui.theme === 'dark' ? '#0e0e11' : '#ffffff');
     if (
       before.goal.enabled !== next.goal.enabled ||
@@ -681,10 +666,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   });
 
   handle('diagnostics:run', async () => runDiagnostics());
-  handle('desktop:requestAccessibility', async () => {
-    await refreshMacOSDesktopAccess({ promptAccessibility: true });
-    return buildState();
-  });
 
   handle('log:get', async () => getLog());
   handle('log:text', async () => formatLogForClipboard());
@@ -709,7 +690,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   handle('link:open', async (payload) => {
     const { url } = z.object({ url: z.string().max(8192) }).parse(payload);
-    if (!ALLOWED_LINKS.has(url) && !safeExternalLink(url)) throw new Error('That link is not allowed');
+    if (!safeExternalLink(url)) throw new Error('That link is not allowed');
     await shell.openExternal(url);
     return true;
   });
@@ -1123,7 +1104,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (allowOpen) await wakeBrowserUrl(`https://chatgpt.com/?octo-model-catalog=${nonce}`, true, true);
   } });
   onUpdateChange(pushState);
-  onMacOSDesktopAccessChange(pushState);
   onLog((entry) => push('log:entry', entry));
   onSessionChange(() => push('session:changed'));
   onSwarmChange(() => push('swarm:changed', swarmState()));

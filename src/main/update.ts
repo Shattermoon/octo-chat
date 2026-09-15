@@ -27,9 +27,7 @@
  * asking for a password during quit is not something this app will do — so a `.deb` install is
  * *told* a new version exists and is given the release page, and nothing is downloaded behind
  * it. That is a real limitation, not parity, and the notice says so rather than implying an
- * update is on its way. macOS is out entirely: those artifacts ship unsigned and unnotarized
- * (see electron-builder.yml), so an app that silently replaced itself there would be handing
- * Gatekeeper a binary the user never chose to trust.
+ * update is on its way. Unsupported operating systems have no release artifact to stage.
  *
  * What this module does **not** own: the version of the browser extension. The bridge already
  * learns that from the authenticated `x-extension-version` header of a paired extension, and
@@ -66,8 +64,8 @@ const RECHECK_MS = 6 * 60 * 60_000;
 /**
  * The artifact this exact installation can apply to itself, or null for one that cannot.
  *
- * Null is a normal answer, not a failure: macOS is out by policy, a Linux `.deb` belongs to the
- * system package manager and would need root to replace, and an architecture with no published
+ * Null is a normal answer, not a failure: a Linux `.deb` belongs to the system package manager
+ * and would need root to replace, and an unsupported platform/architecture with no published
  * artifact has nothing to fetch. Those installations are still told a newer version exists —
  * that is what `latest` with a stage of `idle` means, and the notice turns it into a download
  * link — they are simply not updated for.

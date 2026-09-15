@@ -24,14 +24,10 @@ import { makeTempDir, removeTempDir } from './helpers.js';
 describe('cross-platform tunnel executable discovery', () => {
   it('uses the platform executable suffix', () => {
     expect(tunnelExecutableName('tunnel-client', 'win32')).toBe('tunnel-client.exe');
-    expect(tunnelExecutableName('tunnel-client', 'darwin')).toBe('tunnel-client');
     expect(tunnelExecutableName('cloudflared', 'linux')).toBe('cloudflared');
   });
 
-  it('includes common macOS and Linux install locations', () => {
-    expect(commonBinaryDirsForPlatform('darwin', { HOME: '/Users/dev' }, '/Users/dev')).toEqual(
-      expect.arrayContaining(['/Users/dev/.local/bin', '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'])
-    );
+  it('includes common Linux install locations', () => {
     expect(commonBinaryDirsForPlatform('linux', { HOME: '/home/dev' }, '/home/dev')).toEqual(
       expect.arrayContaining(['/home/dev/.local/bin', '/usr/local/bin', '/usr/bin', '/snap/bin'])
     );

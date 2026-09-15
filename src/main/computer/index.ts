@@ -14,15 +14,13 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { Worker } from 'node:worker_threads';
 import { ensureUsablePath, normalizeEnvironment } from '../env.js';
 import { findWindowsPowerShell, terminateProcessTree } from '../exec.js';
 import { logInfo, logWarn } from '../logger.js';
-import type { MacOSDesktopAccessStatus, MacOSPermissionState } from '../../shared/types.js';
 import { HELPER_SCRIPT } from './helper.js';
 
 /** Width the screenshot is scaled down to, matching computer-use convention. */
@@ -33,26 +31,6 @@ const HELPER_STARTUP_GRACE_MS = 10_000;
 const MAX_FRAMES = 16;
 /** Per-image ceiling; the final Desktop tool layer separately measures text + image together. */
 export const MAX_SCREENSHOT_PNG_BYTES = Math.floor((((8 * 1024 * 1024) - (64 * 1024)) * 3) / 4);
-
-let macOSDesktopAccess: MacOSDesktopAccessStatus | null = null;
-const macOSDesktopAccessListeners = new Set<(status: MacOSDesktopAccessStatus) => void>();
-let macOSDesktopAccessRefreshGeneration = 0;
-
-export function getMacOSDesktopAccess(): MacOSDesktopAccessStatus | null {
-  return macOSDesktopAccess;
-}
-
-export function onMacOSDesktopAccessChange(
-  listener: (status: MacOSDesktopAccessStatus) => void
-): () => void {
-  macOSDesktopAccessListeners.add(listener);
-  return () => macOSDesktopAccessListeners.delete(listener);
-}
-
-function publishMacOSDesktopAccess(status: MacOSDesktopAccessStatus): void {
-  macOSDesktopAccess = status;
-  for (const listener of macOSDesktopAccessListeners) listener(status);
-}
 
 export type ActionRoute = 'uia' | 'sendinput' | 'focus' | 'shell' | 'local';
 
@@ -199,14 +177,7 @@ export type Action =
   | { type: 'read_clipboard' }
   | { type: 'write_clipboard'; text: string };
 
-/**
- * One long-lived native backend transport.
- *
- * Windows launches the fixed PowerShell/Win32 bridge. macOS loads the Swift backend through
- * an N-API addon on a Node Worker thread in this Electron process; the old subprocess path is
- * retained only behind an explicit test/development override. Both speak the same JSON
- * protocol, so frame identity, stale refs, batching and model-facing semantics remain neutral.
- */
+/** One long-lived Windows PowerShell/Win32 native backend transport. */
 interface PendingHelperRequest {
   resolve: (value: Record<string, any>) => void;
   reject: (reason: Error) => void;
@@ -225,17 +196,8 @@ interface HelperRuntime {
   scriptCleanup: Promise<void> | null;
 }
 
-interface MacOSAddonRuntime {
-  generation: number;
-  worker: Worker;
-  pending: PendingHelperRequest | null;
-  exited: boolean;
-}
-
 let helperRuntime: HelperRuntime | null = null;
 let helperStarting: Promise<HelperRuntime> | null = null;
-let macOSAddonRuntime: MacOSAddonRuntime | null = null;
-let macOSAddonStarting: Promise<MacOSAddonRuntime> | null = null;
 let helperQueue: Promise<void> = Promise.resolve();
 let helperGeneration = 0;
 let helperStopping = false;
@@ -258,9 +220,7 @@ function generationOfReply(reply: Record<string, any>): number {
 
 function isHelperGenerationActive(generation: number): boolean {
   if (helperStopping) return false;
-  return useMacOSDesktopAddon()
-    ? macOSAddonRuntime !== null && !macOSAddonRuntime.exited && macOSAddonRuntime.generation === generation
-    : helperRuntime !== null && helperRuntime.child.exitCode === null && helperRuntime.generation === generation;
+  return helperRuntime !== null && helperRuntime.child.exitCode === null && helperRuntime.generation === generation;
 }
 
 type ExpectedHelper = { generation: number; code: 'STALE_FRAME' | 'STALE_REF' };
@@ -276,7 +236,7 @@ function assertHelperGeneration(generation: number, expected?: ExpectedHelper): 
 
 export function helperTimeoutMs(
   request: Record<string, unknown>,
-  platform: NodeJS.Platform = process.platform
+  _platform: NodeJS.Platform = process.platform
 ): number {
   switch (request['op']) {
     case 'windows':
@@ -288,26 +248,15 @@ export function helperTimeoutMs(
       return 8_000;
     case 'capture':
     case 'snapshot':
-      // macOS may spend 12s enumerating ScreenCaptureKit content, then up to 10s
-      // starting a pre-14 stream and 15s waiting for its first frame. Snapshot can
-      // additionally traverse the AX tree, so the parent must outlive those native
-      // budgets instead of retiring a helper that is still within its own deadline.
-      // A visible-screen fallback may then capture more than one intersecting display
-      // sequentially, so retain enough headroom for a normal multi-monitor host too.
-      return platform === 'darwin' ? 120_000 : 10_000;
+      return 10_000;
     case 'warm':
       return 10_000;
     case 'act':
-      if (platform !== 'darwin') {
+      {
         const actions = Array.isArray(request['actions']) ? request['actions'].slice(0, 20) : [];
         return 15_000 + actions.reduce((duration, action) => duration + (action?.type === 'drag'
           ? Math.min(2000, Math.max(50, Number(action.durationMs) || 350)) : 0), 0);
       }
-      // Every macOS physical mutation can now re-prove the exact AX/WindowServer input
-      // target, and an explicit focus may spend up to two seconds in its bounded poll. Size
-      // the parent deadline for the whole permitted batch so the helper can return partial
-      // completion evidence instead of being killed after earlier actions already landed.
-      return 15_000 + Math.min(20, Array.isArray(request['actions']) ? request['actions'].length : 1) * 2_100;
     default:
       return HELPER_TIMEOUT_MS;
   }
@@ -368,25 +317,18 @@ async function startHelper(): Promise<HelperRuntime> {
   if (helperStarting) return helperStarting;
 
   helperStarting = (async () => {
-    const scriptDirectory = process.platform === 'darwin' ? null : await fs.mkdtemp(path.join(os.tmpdir(), 'octo-desktop-helper-'));
+    const scriptDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'octo-desktop-helper-'));
     try {
-      const scriptFile = scriptDirectory ? path.join(scriptDirectory, 'helper.ps1') : null;
+      const scriptFile = path.join(scriptDirectory, 'helper.ps1');
       // Keep large native source out of inherited environment blocks and command lines.
       // A BOM makes Windows PowerShell 5.1 read this UTF-8 source independently of ACP.
-      if (scriptFile) await fs.writeFile(scriptFile, `\uFEFF${HELPER_SCRIPT}`, 'utf8');
+      await fs.writeFile(scriptFile, `\uFEFF${HELPER_SCRIPT}`, 'utf8');
       if (helperStopping) throw new ComputerError('The desktop helper is shutting down.');
       return await new Promise<HelperRuntime>((resolve, reject) => {
         const env = normalizeEnvironment(process.env);
         ensureUsablePath(env);
-        let host: string;
-        let args: string[];
-        if (process.platform === 'darwin') {
-          host = locateMacOSDesktopHelper();
-          args = [];
-        } else {
-          host = findWindowsPowerShell() ?? 'powershell.exe';
-          args = ['-NoProfile', '-NonInteractive', '-NoLogo', '-ExecutionPolicy', 'Bypass', '-File', scriptFile!];
-        }
+        const host = findWindowsPowerShell() ?? 'powershell.exe';
+        const args = ['-NoProfile', '-NonInteractive', '-NoLogo', '-ExecutionPolicy', 'Bypass', '-File', scriptFile];
         const child = spawn(host, args, {
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -513,92 +455,6 @@ async function startHelper(): Promise<HelperRuntime> {
   return helperStarting;
 }
 
-function locateMacOSDesktopHelper(): string {
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const candidates = [
-    process.env['OCTO_MAOCTO_DESKTOP_HELPER'],
-    resourcesPath ? path.join(resourcesPath, 'desktop', 'macos-desktop-helper') : null,
-    path.resolve(
-      process.cwd(),
-      'resources',
-      'packaging',
-      'desktop',
-      'darwin',
-      process.arch,
-      'macos-desktop-helper'
-    )
-  ].filter((candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0);
-  const helper = candidates.find((candidate) => existsSync(candidate));
-  if (helper) return helper;
-  throw new ComputerError(
-    `The macOS desktop helper is missing for ${process.arch}. Run npm run desktop:mac before development, or rebuild the macOS package.`
-  );
-}
-
-function useMacOSDesktopAddon(): boolean {
-  return process.platform === 'darwin' && !process.env['OCTO_MAOCTO_DESKTOP_HELPER'];
-}
-
-function locateMacOSDesktopAddon(): { addon: string; library: string } {
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const explicitAddon = process.env['OCTO_MAOCTO_DESKTOP_ADDON'];
-  const explicitLibrary = process.env['OCTO_MAOCTO_DESKTOP_LIBRARY'];
-  const candidates = [
-    explicitAddon && explicitLibrary ? { addon: explicitAddon, library: explicitLibrary } : null,
-    resourcesPath
-      ? {
-          addon: path.join(resourcesPath, 'desktop', 'macos-desktop-addon.node'),
-          library: path.join(resourcesPath, 'desktop', 'libocto-desktop.dylib')
-        }
-      : null,
-    {
-      addon: path.resolve(
-        process.cwd(),
-        'resources',
-        'packaging',
-        'desktop',
-        'darwin',
-        process.arch,
-        'macos-desktop-addon.node'
-      ),
-      library: path.resolve(
-        process.cwd(),
-        'resources',
-        'packaging',
-        'desktop',
-        'darwin',
-        process.arch,
-        'libocto-desktop.dylib'
-      )
-    }
-  ].filter((candidate): candidate is { addon: string; library: string } => candidate !== null);
-  const found = candidates.find((candidate) => existsSync(candidate.addon) && existsSync(candidate.library));
-  if (found) return found;
-  throw new ComputerError(
-    `The in-process macOS desktop backend is missing for ${process.arch}. Run npm run desktop:mac before development, or rebuild the macOS package.`
-  );
-}
-
-const MAOCTO_ADDON_WORKER_SOURCE = String.raw`
-  const { parentPort, workerData } = require('node:worker_threads');
-  const { createRequire } = require('node:module');
-  try {
-    const addon = createRequire(process.execPath)(workerData.addon);
-    addon.initialize(workerData.library);
-    parentPort.postMessage({ type: 'ready' });
-    parentPort.on('message', ({ request }) => {
-      try {
-        const reply = JSON.parse(addon.handle(JSON.stringify(request)));
-        parentPort.postMessage({ type: 'reply', reply });
-      } catch (error) {
-        parentPort.postMessage({ type: 'failure', message: error instanceof Error ? error.message : String(error) });
-      }
-    });
-  } catch (error) {
-    parentPort.postMessage({ type: 'failure', message: error instanceof Error ? error.message : String(error) });
-  }
-`;
-
 function completedHelperRoutes(reply: Record<string, any>, completed: number): ActionRoute[] | undefined {
   const raw = reply['routes'];
   if (!Number.isInteger(completed) || completed < 0 || !Array.isArray(raw) || raw.length !== completed) {
@@ -609,143 +465,8 @@ function completedHelperRoutes(reply: Record<string, any>, completed: number): A
   return routes as ActionRoute[];
 }
 
-function protocolFailure(reply: Record<string, any>): ComputerError | null {
-  if (reply['ok'] !== false) return null;
-  const completed = Number(reply['completed_count']);
-  const failed = Number(reply['failed_index']);
-  const completedRoutes = completedHelperRoutes(reply, completed);
-  return new ComputerError(
-    `${String(reply['error_code'] ?? 'HELPER_ERROR')}: ${String(reply['message'] ?? 'Desktop helper failed')}`,
-    {
-      ...(Number.isInteger(completed) && completed >= 0 ? { completedCount: completed } : {}),
-      ...(Number.isInteger(failed) && failed >= 0 ? { failedIndex: failed } : {}),
-      ...(completedRoutes ? { completedRoutes } : {})
-    }
-  );
-}
-
-async function retireMacOSAddon(runtime: MacOSAddonRuntime): Promise<void> {
-  if (macOSAddonRuntime === runtime) macOSAddonRuntime = null;
-  runtime.exited = true;
-  await runtime.worker.terminate().then(() => undefined, () => undefined);
-}
-
-async function startMacOSAddon(): Promise<MacOSAddonRuntime> {
-  if (helperStopping) throw new ComputerError('The desktop helper is shutting down.');
-  if (macOSAddonRuntime && !macOSAddonRuntime.exited) return macOSAddonRuntime;
-  if (macOSAddonStarting) return macOSAddonStarting;
-  const payload = locateMacOSDesktopAddon();
-  macOSAddonStarting = new Promise<MacOSAddonRuntime>((resolve, reject) => {
-    const worker = new Worker(MAOCTO_ADDON_WORKER_SOURCE, { eval: true, workerData: payload });
-    const runtime: MacOSAddonRuntime = { worker, pending: null, exited: false, generation: 0 };
-    let started = false;
-    const startupTimer = setTimeout(() => {
-      if (started) return;
-      void retireMacOSAddon(runtime);
-      reject(new ComputerError('The macOS Desktop addon did not initialize in time.'));
-    }, HELPER_STARTUP_GRACE_MS);
-    worker.on('message', (message: { type?: string; reply?: unknown; message?: string }) => {
-      if (message.type === 'ready' && !started) {
-        started = true;
-        clearTimeout(startupTimer);
-        macOSAddonRuntime = runtime;
-        runtime.generation = ++helperGeneration;
-        resolve(runtime);
-        return;
-      }
-      if (message.type === 'failure') {
-        const error = new ComputerError(`macOS Desktop addon failed: ${message.message ?? 'unknown failure'}`);
-        if (!started) {
-          clearTimeout(startupTimer);
-          reject(error);
-        }
-        const pending = runtime.pending;
-        runtime.pending = null;
-        if (pending) {
-          clearTimeout(pending.timer);
-          pending.reject(error);
-        }
-        void retireMacOSAddon(runtime);
-        return;
-      }
-      if (message.type !== 'reply') return;
-      const pending = runtime.pending;
-      runtime.pending = null;
-      if (!pending) {
-        logWarn('macOS Desktop addon sent an unsolicited reply');
-        return;
-      }
-      clearTimeout(pending.timer);
-      const reply = message.reply;
-      if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) {
-        pending.reject(new ComputerError('The macOS Desktop addon returned a malformed protocol response.'));
-        return;
-      }
-      const record = reply as Record<string, any>;
-      const failure = protocolFailure(record);
-      if (failure) pending.reject(failure);
-      else pending.resolve(stampHelperReply(record, runtime.generation));
-    });
-    worker.once('error', (error) => {
-      if (!started) {
-        clearTimeout(startupTimer);
-        reject(new ComputerError(`Could not start the macOS Desktop addon: ${error.message}`));
-      }
-      const pending = runtime.pending;
-      runtime.pending = null;
-      if (pending) {
-        clearTimeout(pending.timer);
-        pending.reject(new ComputerError(`macOS Desktop addon error: ${error.message}`));
-      }
-    });
-    worker.once('exit', () => {
-      runtime.exited = true;
-      if (macOSAddonRuntime === runtime) macOSAddonRuntime = null;
-      if (!started) {
-        clearTimeout(startupTimer);
-        reject(new ComputerError('The macOS Desktop addon exited during startup.'));
-      }
-      const pending = runtime.pending;
-      runtime.pending = null;
-      if (pending) {
-        clearTimeout(pending.timer);
-        pending.reject(new ComputerError('The macOS Desktop addon exited before answering.'));
-      }
-    });
-  }).finally(() => {
-    macOSAddonStarting = null;
-  });
-  return macOSAddonStarting;
-}
-
-async function sendMacOSAddonRequest(
-  request: Record<string, unknown>,
-  expected?: ExpectedHelper,
-  beforeSend?: () => void | Promise<void>
-): Promise<Record<string, any>> {
-  const runtime = await startMacOSAddon();
-  assertHelperGeneration(runtime.generation, expected);
-  if (runtime.pending) throw new ComputerError('macOS Desktop addon received overlapping requests.');
-  await beforeSend?.();
-  assertHelperGeneration(runtime.generation, expected);
-  if (!isHelperGenerationActive(runtime.generation)) {
-    throw new ComputerError('The desktop helper changed before the request could be sent.');
-  }
-  return new Promise<Record<string, any>>((resolve, reject) => {
-    let pending: PendingHelperRequest;
-    const timer = setTimeout(() => {
-      if (runtime.pending !== pending) return;
-      runtime.pending = null;
-      void retireMacOSAddon(runtime).then(() => reject(new ComputerError('The macOS Desktop addon did not answer in time.')));
-    }, helperTimeoutMs(request));
-    pending = { resolve, reject, timer };
-    runtime.pending = pending;
-    runtime.worker.postMessage({ request });
-  });
-}
-
 /**
- * Stops the long-lived native desktop backend and waits for its process/worker to exit.
+ * Stops the long-lived native desktop backend and waits for its process to exit.
  *
  * The helper is an app-owned process, not an implementation detail of one request: a
  * timeout or Electron shutdown must therefore retire the whole tree before the process
@@ -755,26 +476,12 @@ export async function stopComputerHelper(): Promise<void> {
   helperStopping = true;
   const starting = helperStarting;
   if (starting) await starting.catch(() => null);
-  const addonStarting = macOSAddonStarting;
-  if (addonStarting) await addonStarting.catch(() => null);
   const runtime = helperRuntime;
-  const addonRuntime = macOSAddonRuntime;
   helperRuntime = null;
   helperStarting = null;
-  macOSAddonRuntime = null;
-  macOSAddonStarting = null;
   uiRefs.clear();
   frames.clear();
   lastFrame = null;
-  if (addonRuntime) {
-    const pending = addonRuntime.pending;
-    addonRuntime.pending = null;
-    if (pending) {
-      clearTimeout(pending.timer);
-      pending.reject(new ComputerError('The desktop helper was stopped because the app is shutting down.'));
-    }
-    await retireMacOSAddon(addonRuntime);
-  }
   if (!runtime) {
     await Promise.allSettled([...helperRetirements]);
     return;
@@ -800,7 +507,6 @@ async function sendHelperRequest(
   expected?: ExpectedHelper,
   beforeSend?: () => void | Promise<void>
 ): Promise<Record<string, any>> {
-  if (useMacOSDesktopAddon()) return sendMacOSAddonRequest(request, expected, beforeSend);
   const runtime = await startHelper();
   assertHelperGeneration(runtime.generation, expected);
   if (runtime.pending) throw new ComputerError('Desktop helper received overlapping requests.');
@@ -1291,9 +997,6 @@ async function screenshotFromReply(
   )
     ? (rawDisplays as Rect[]).map((value) => ({ ...value }))
     : null;
-  if (process.platform === 'darwin' && frameWindow === null && !displayTopology) {
-    throw new ComputerError('The macOS desktop helper returned a screen frame without exact display topology.');
-  }
   const frame: Frame = {
     id: nextFrameId++,
     helperGeneration: generationOfReply(reply),
@@ -2027,67 +1730,11 @@ export async function checkAvailable(): Promise<string | null> {
  * Connection owns when Desktop becomes publishable; shutdown remains owned by
  * `stopComputerHelper`. Clipboard-only configurations deliberately never call this.
  */
-async function requestParentAccessibility(): Promise<void> {
+export async function prewarmComputerHelper(): Promise<void> {
   try {
-    // The native backend executes inside this Electron process, so the parent owns the
-    // one user-facing prompt. Keep Electron lazy for protocol tests outside the app.
-    const electron = await import('electron');
-    electron.systemPreferences?.isTrustedAccessibilityClient(true);
-  } catch {
-    // The subsequent backend preflight remains authoritative and fail-closed.
-  }
-}
-
-function nativePermission(value: unknown): MacOSPermissionState {
-  return value === true ? 'granted' : value === false ? 'missing' : 'unknown';
-}
-
-export async function refreshMacOSDesktopAccess(
-  options: { promptAccessibility?: boolean } = {}
-): Promise<MacOSDesktopAccessStatus | null> {
-  if (process.platform !== 'darwin') return null;
-  const generation = ++macOSDesktopAccessRefreshGeneration;
-  if (options.promptAccessibility === true) await requestParentAccessibility();
-  try {
-    const reply = await runHelper({ op: 'warm' });
-    const status: MacOSDesktopAccessStatus = {
-      screen: nativePermission(reply['screenPermission']),
-      accessibility: nativePermission(reply['accessibilityPermission']),
-      checkedAt: Date.now(),
-      error: null
-    };
-    if (generation === macOSDesktopAccessRefreshGeneration) publishMacOSDesktopAccess(status);
-    return generation === macOSDesktopAccessRefreshGeneration ? status : macOSDesktopAccess;
+    await runHelper({ op: 'warm' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const status: MacOSDesktopAccessStatus = {
-      screen: 'unknown',
-      accessibility: 'unknown',
-      checkedAt: Date.now(),
-      error: message
-    };
-    if (generation === macOSDesktopAccessRefreshGeneration) publishMacOSDesktopAccess(status);
-    return generation === macOSDesktopAccessRefreshGeneration ? status : macOSDesktopAccess;
+    logWarn(`computer use prewarm failed: ${message}`);
   }
-}
-
-export async function prewarmComputerHelper(): Promise<void> {
-  if (process.platform !== 'darwin') {
-    try {
-      await runHelper({ op: 'warm' });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logWarn(`computer use prewarm failed: ${message}`);
-    }
-    return;
-  }
-  const status = await refreshMacOSDesktopAccess();
-  if (!status) return;
-  if (status.error) {
-    logWarn(`computer use prewarm failed: ${status.error}`);
-    return;
-  }
-  logInfo(
-    `desktop macos permissions screen=${status.screen} accessibility=${status.accessibility} execution=in-process`
-  );
 }

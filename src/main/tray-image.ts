@@ -7,18 +7,12 @@ export interface TrayRepresentation {
 }
 
 export interface TrayImageSpec {
-  /** macOS menu-bar images must be template images so the OS chooses light/dark contrast. */
   template: boolean;
   representations: readonly [TrayRepresentation, TrayRepresentation];
 }
 
 const LOGICAL_SIZE = 16;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-// Electron uses this as the NSStatusItem autosave identity on macOS. Keep it stable forever:
-// changing it is equivalent to creating a brand-new menu-bar item and loses the position a user
-// chose with Cmd-drag. Do not pass it on unsigned Windows builds, where Tray GUID persistence has
-// different signature/path semantics.
-const MAOCTO_TRAY_GUID = '2b43965a-ecf3-4f6b-9e3a-50a1dc93a85f';
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -74,13 +68,11 @@ function edgeCoverage(distance: number, radius: number): number {
 /**
  * Pure RGBA raster used by the tray image factory and its tests.
  *
- * Windows keeps the old green/grey status dot. Linux gets the same familiar colored mark but
- * through a portable PNG rather than a platform-dependent raw bitmap. macOS intentionally uses
- * only black + alpha, as required for menu-bar template images; disconnected is a ring so status
- * remains visible even though template images cannot carry semantic color.
+ * Windows keeps the old green/grey status dot. Linux gets the same familiar colored mark through
+ * a portable PNG rather than a platform-dependent raw bitmap.
  */
 export function trayRgba(
-  platform: NodeJS.Platform,
+  _platform: NodeJS.Platform,
   running: boolean,
   scaleFactor: 1 | 2
 ): { size: number; rgba: Buffer } {
@@ -88,18 +80,12 @@ export function trayRgba(
   const rgba = Buffer.alloc(size * size * 4);
   const centre = (size - 1) / 2;
   const outerRadius = 6.2 * scaleFactor;
-  const innerRadius = 3.25 * scaleFactor;
-  const macTemplate = platform === 'darwin';
-  const [r, g, b] = macTemplate ? [0, 0, 0] : running ? [34, 160, 90] : [130, 130, 138];
+  const [r, g, b] = running ? [34, 160, 90] : [130, 130, 138];
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const distance = Math.hypot(x - centre, y - centre);
-      let alpha = edgeCoverage(distance, outerRadius);
-      if (macTemplate && !running) {
-        // A template image has no status color. Use a hollow mark for disconnected instead.
-        alpha *= 1 - edgeCoverage(distance, innerRadius);
-      }
+      const alpha = edgeCoverage(distance, outerRadius);
       const offset = (y * size + x) * 4;
       rgba[offset] = r;
       rgba[offset + 1] = g;
@@ -119,20 +105,5 @@ export function trayImageSpec(
     const { size, rgba } = trayRgba(platform, running, scaleFactor);
     return { scaleFactor, png: encodePng(size, rgba) };
   }) as [TrayRepresentation, TrayRepresentation];
-  return { template: platform === 'darwin', representations };
-}
-
-/** Stable menu-bar identity on macOS; other platforms keep their existing tray semantics. */
-export function trayGuidForPlatform(platform: NodeJS.Platform = process.platform): string | undefined {
-  return platform === 'darwin' ? MAOCTO_TRAY_GUID : undefined;
-}
-
-/**
- * Optional Tray constructor tail, expressed as a tuple so unsupported platforms omit the
- * argument entirely. Electron 43 validates an explicitly-present undefined GUID and throws
- * before the rest of app startup can run; an empty tuple preserves the one-argument overload.
- */
-export function trayGuidArgsForPlatform(platform: NodeJS.Platform = process.platform): [] | [string] {
-  const guid = trayGuidForPlatform(platform);
-  return guid ? [guid] : [];
+  return { template: false, representations };
 }

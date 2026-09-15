@@ -116,9 +116,8 @@ const CORE: SurfaceDefinition = {
  * Desktop — seeing and driving the native desktop.
  *
  * This one earns its boundary twice over. It is gated on permissions the user grants
- * separately and can switch off independently; Windows has the Window2 app/window API,
- * while macOS retains observe/computer. The majority of coding sessions
- * never touch the desktop at all. Folding it into Core would put its weight into every
+ * separately and can switch off independently; Windows has the Window2 app/window API.
+ * The majority of coding sessions never touch the desktop at all. Folding it into Core would put its weight into every
  * no-query discovery of the coding surface, for a capability most conversations do not
  * want.
  */
@@ -134,7 +133,7 @@ const DESKTOP: SurfaceDefinition = {
   cardSummary:
     'Apps, background window screenshots, mouse/keyboard control and the clipboard. Optional — connect it only if you want desktop automation.',
   required: false,
-  tools: [...WINDOWS_COMPUTER_METHODS, 'read_clipboard', 'write_clipboard', 'observe', 'computer', 'exec']
+  tools: [...WINDOWS_COMPUTER_METHODS, 'read_clipboard', 'write_clipboard', 'exec']
 };
 
 const PLUGINS: SurfaceDefinition = {
@@ -157,7 +156,7 @@ export function surfaceDefinition(id: SurfaceId): SurfaceDefinition {
 
 /** Platform/capability projection used by setup; each registrar enforces the same split. */
 export function desktopToolNames(caps: Capabilities, platform: NodeJS.Platform = process.platform): string[] {
-  if (platform !== 'win32') return [...(caps.screen ? ['observe'] : []), ...(caps.control || caps.clipboardRead || caps.clipboardWrite ? ['computer'] : [])];
+  if (platform !== 'win32') return [];
   return [
     ...(caps.screen ? WINDOWS_COMPUTER_READ_METHODS : []),
     ...(caps.control ? WINDOWS_COMPUTER_INPUT_METHODS : []),

@@ -1,7 +1,7 @@
 /**
  * Bundle the pinned ripgrep release for one explicit packaging target.
  *
- * Windows uses the upstream zip; macOS and Linux use tar.gz releases. Linux intentionally
+ * Windows uses the upstream zip; Linux uses tar.gz releases. Linux intentionally
  * uses musl builds so the bundled rg stays portable across glibc-based distributions too.
  */
 

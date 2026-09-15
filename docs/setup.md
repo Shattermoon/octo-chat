@@ -4,7 +4,7 @@
 
 ## Quick start
 
-1. **Install and open Octo Chat.** Choose the download for your operating system and CPU.
+1. **Install and open Octo Chat.** Choose the Windows or Linux download for your CPU.
 2. **Choose what ChatGPT may access.** In **Settings → Workspace**, approve a project folder and review the tool permissions.
 3. **Connect the local tools.** Configure a tunnel in **Settings → Setup**, press **Connect**, then add the **Core** app in ChatGPT's Developer mode.
 4. **Load the companion extension.** Press **Open extension folder**. In `chrome://extensions`, enable Developer mode, choose **Load unpacked** and select that folder. Pairing is automatic.
@@ -90,7 +90,7 @@ npm run dist:linux:x64    # Linux x64
 npm run dist:linux:arm64  # Linux ARM64
 ```
 
-Build on the target OS. The release workflow uses native runners for the four current Windows/Linux targets, checks the packaged runtimes and assembles the complete artifact set with checksums and corresponding native library sources. macOS packaging is paused.
+Build on the target OS. The release workflow uses native runners for the four current Windows/Linux targets, checks the packaged runtimes and assembles the complete artifact set with checksums and corresponding native library sources. macOS is not a packaging target.
 
 ---
 

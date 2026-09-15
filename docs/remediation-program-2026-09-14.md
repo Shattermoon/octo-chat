@@ -107,8 +107,8 @@ an invented umbrella ID. `CI-001` intentionally appears in both the stabilizatio
 tranches, distinguished by the PR title/scope rather than by creating a new identifier.
 
 Use audit-based branch names for new work. Do not rename an already-open branch solely for cosmetic
-consistency; the current SEC-002/SEC-003 branch may retain `feat/sec-002-exact-desktop-principal`
-until it merges.
+consistency; preserve an existing branch name when a review is already in progress, and apply the
+standard to the next branch created from `main`.
 
 Recommended future branch names:
 
@@ -125,31 +125,31 @@ The graph below records technical dependencies only. It does **not** authorize p
 
 ```mermaid
 flowchart TD
-    R001[REL-001 / TEST-001 / MCP-001 Release oracle] --> R007[CI-001 (stabilization) CI shared-state fixes]
-    R002[SEC-001 Action-policy seam] --> R004[SEC-002 / SEC-003 Exact Desktop Principal]
-    R004 --> R006[SEC-004 / SEC-005 / SEC-006 / SEC-007 Restricted/Desktop defaults]
-    R002 --> R010[WS-001 WorkspaceLease]
-    R005[ID-001 / SES-001 Correlation + session deletion] --> R010
-    R002 --> R011[GH-001 Typed GitHub integration]
+    REL[REL-001 / TEST-001 / MCP-001 Release oracle] --> CI[CI-001 stabilization]
+    SEC1[SEC-001 Action-policy seam] --> SEC23[SEC-002 / SEC-003 Exact Desktop Principal]
+    SEC23 --> SEC4567[SEC-004 / SEC-005 / SEC-006 / SEC-007 Restricted/Desktop defaults]
+    SEC23 --> PLATFORM[PLATFORM-002 Remove macOS runtime]
+    SEC1 --> WS[WS-001 WorkspaceLease]
+    IDSES[ID-001 / SES-001 Correlation + session deletion] --> WS
+    SEC1 --> GH[GH-001 Typed GitHub integration]
 
-    R008[BRG-001 Bridge lifecycle fence] --> R009[BRG-002 Final repair claims]
-    R012[GOAL-001 / GOAL-002 Goal debt foundations] --> R013[GOAL-003 Goal control store]
-    R013 --> R014[GOAL-004 Continuation debt transfer]
-    R014 --> R015[GOAL-005 Goal helper isolation]
+    BRG1[BRG-001 Bridge lifecycle fence] --> BRG2[BRG-002 Final repair claims]
+    GOAL12[GOAL-001 / GOAL-002 Goal debt foundations] --> GOAL3[GOAL-003 Goal control store]
+    GOAL3 --> GOAL4[GOAL-004 Continuation debt transfer]
+    GOAL4 --> GOAL5[GOAL-005 Goal helper isolation]
 
-    R016[PLUG-001 Plugin refresh lease] --> R018[PLUG-002 Playwright parity]
-    R018 --> R019[PLUG-003 Memory lifecycle acceptance]
-    R019 --> R020[PLUG-005 Plugin health chain]
+    PLUG1[PLUG-001 Plugin refresh lease] --> PLUG2[PLUG-002 Playwright parity]
+    PLUG2 --> PLUG3[PLUG-003 Memory lifecycle acceptance]
+    PLUG3 --> PLUG5[PLUG-005 Plugin health chain]
 
-    R009 --> R021[EXT-001 Extension provider adapters]
-    R015 --> R021
-    R016 --> R021
-    R021 --> R022[EXT-002 Main-side orchestration]
+    BRG2 --> EXT1[EXT-001 Extension provider adapters]
+    GOAL5 --> EXT1
+    PLUG1 --> EXT1
+    EXT1 --> EXT2[EXT-002 Main-side orchestration]
 
-    R006 --> R024[PLATFORM-002 Remove paused macOS runtime]
-    R020 --> R027[OBS-001 Diagnostics page]
-    R015 --> R027
-    R021 --> R027
+    PLUG5 --> OBS[OBS-001 Diagnostics page]
+    GOAL5 --> OBS
+    EXT1 --> OBS
 ```
 
 ## 5. Audit queue and merge order
@@ -215,12 +215,16 @@ Scope: classify a directory symlink with `lstat`/dirent and skip it before targe
 
 ### Stage 1 — close the P0 authority gaps and stabilize stateful CI
 
-#### [REVIEW][SEC-002][SEC-003] — exact Principal on every Desktop mutation
+#### [DONE][SEC-002][SEC-003] — exact Principal on every Desktop mutation
 
 **Owner:** Repository maintainer
 **Audit IDs:** SEC-002, SEC-003
 **Depends on:** SEC-001
 **Blocks:** SEC-004 / SEC-005 / SEC-006 / SEC-007
+
+Merged as PR #5 on 2026-09-15. Final pushed head `55cbbc01238771bf2e3f6f77f39924781794075f`
+passed exact-head review and hosted Linux/Windows verification; merge commit on `main` is
+`b81019cbe6504e8e5ef5243b58f3150049c546d1`.
 
 Scope:
 
@@ -236,6 +240,25 @@ Required regression:
 unattributed disabled + every mutation class → DENY
 known exact Principal + capability enabled → existing behavior
 ```
+
+#### [DONE][PLATFORM-001] — remove macOS from the release/support matrix
+
+**Owner:** Repository maintainer
+**Audit ID:** PLATFORM-001
+**Depends on:** none
+
+The 2.2.0 release matrix, CI, packaging targets and publication workflows already ship only
+Windows and Linux. PLATFORM-002 owns deletion of the dormant implementation that remained in source.
+
+#### [REVIEW][PLATFORM-002] — remove macOS runtime/helper/tests
+
+**Owner:** Repository maintainer
+**Audit ID:** PLATFORM-002
+**Depends on:** SEC-002 / SEC-003 merged; no dependency on later restricted-Desktop policy work
+
+Remove the dormant macOS Desktop helper/addon, package preparation/seal/smoke scripts, mac-only
+runtime/UI branches and mac-only tests. Preserve generic Linux POSIX behavior, shared dependency
+source/license inventory and stored Desktop capability choices that remain meaningful on Windows.
 
 #### [READY][ID-001][SES-001] — durable request ownership and session deletion fencing
 
@@ -256,12 +279,11 @@ Required regressions:
 - ownership survives pressure beyond the former 50,000-entry bound;
 - paused reconstruction → delete → resume cannot recreate a directory, catalog row or open session.
 
-#### [BLOCKED][SEC-004][SEC-005][SEC-006][SEC-007] — restricted Desktop, least-privilege defaults and truthful permission UX
+#### [QUEUED][SEC-004][SEC-005][SEC-006][SEC-007] — restricted Desktop, least-privilege defaults and truthful permission UX
 
 **Owner:** Repository maintainer
 **Audit IDs:** SEC-004, SEC-005, SEC-006, SEC-007
 **Depends on:** SEC-002 / SEC-003
-**Blocks:** PLATFORM-002 macOS runtime deletion if shared Desktop setup files overlap
 
 Scope:
 
@@ -495,14 +517,6 @@ Move durable workflow state out of provider-private DOM owners where possible. T
 
 Add a validated dormant `conversationId → owner` reverse index and use lazy debounced swarm snapshot materialization while retaining immediate durable acceptance barriers.
 
-#### [BLOCKED][PLATFORM-002] — remove paused macOS runtime/helper/tests
-
-**Owner:** Repository maintainer
-**Audit ID:** PLATFORM-002
-**Depends on:** SEC-004 / SEC-005 / SEC-006 / SEC-007 if shared Desktop capability/config/setup files overlap
-
-The release matrix is already Windows/Linux. This PR removes the dormant macOS Desktop helper/addon, package preparation/seal/smoke scripts and mac-only tests while preserving generic Linux POSIX behavior.
-
 #### [QUEUED][BRG-003] — remove passive app-show browser opening
 
 **Owner:** Repository maintainer
@@ -672,34 +686,35 @@ be revised. The next implementation starts from current `main` only after the cu
 | 001 | REL-001, TEST-001, MCP-001 | `DONE` | release-oracle/schema/locale repairs | none |
 | 002 | SEC-001 | `DONE` | central action-policy seam | none |
 | 003 | FS-001 | `DONE` | no-follow symlink metadata boundary | none |
-| 004 | **SEC-002, SEC-003** | **`REVIEW`** | exact Desktop Principal | SEC-001 |
-| 005 | **ID-001, SES-001** | **`READY`** | durable request ownership + session deletion fencing | serial gate: SEC-002/SEC-003 must be `DONE` |
-| 006 | SEC-004, SEC-005, SEC-006, SEC-007 | `BLOCKED` | restricted Desktop + least-privilege defaults | SEC-002, SEC-003 |
-| 007 | CI-001 | `QUEUED` | aggregate-suite contamination/timing stabilization | after row 006; REL-001/TEST-001/MCP-001 already done |
-| 008 | BRG-001 | `QUEUED` | bridge lifecycle generation | after row 007 |
-| 009 | BRG-002 | `BLOCKED` | final repair authority claim | BRG-001 |
-| 010 | WS-001 | `BLOCKED` | durable WorkspaceLease | SEC-001 + ID-001/SES-001; after BRG-002 |
-| 011 | GH-001 | `BLOCKED` | typed GitHub remote integration | SEC-001 + final SEC-004..SEC-007 policy vocabulary |
-| 012 | GOAL-001, GOAL-002 | `QUEUED` | reply-debt foundations | after GH-001 / BRG-002 |
-| 013 | GOAL-003 | `BLOCKED` | transactional Goal control store | GOAL-001, GOAL-002 |
-| 014 | GOAL-004 | `BLOCKED` | continuation debt disposition | GOAL-003 |
-| 015 | GOAL-005 | `BLOCKED` | helper Temporary Chat isolation | GOAL-004 |
-| 016 | PLUG-001 | `QUEUED` | refresh lease vs click attempt | after GOAL-005 |
-| 017 | PLUG-004 | `QUEUED` | exact npm installation root | after PLUG-001 |
-| 018 | PLUG-002 | `BLOCKED` | Playwright production/test parity | PLUG-001 if shared readiness state changes; after PLUG-004 |
-| 019 | PLUG-003 | `BLOCKED` | Memory production lifecycle acceptance | PLUG-002 |
-| 020 | PLUG-005 | `BLOCKED` | plugin health chain + diagnostics signals | PLUG-003 |
-| 021 | EXT-001 | `BLOCKED` | provider-private extension adapters | BRG-002 + GOAL-005 + PLUG-001 |
-| 022 | EXT-002 | `BLOCKED` | move durable orchestration main-side | EXT-001 |
-| 023 | AG-001, AG-002 | `QUEUED` | agent lookup + persistence efficiency | after EXT-002 |
-| 024 | PLATFORM-002 | `BLOCKED` | remove paused macOS runtime/helper/tests | SEC-004..SEC-007 where shared Desktop files overlap |
-| 025 | BRG-003 | `QUEUED` | passive app-show browser opening removal | after PLATFORM-002 |
-| 026 | BRG-004 | `QUEUED` | localhost trust decision/hardening | after BRG-003 |
-| 027 | OBS-001 | `BLOCKED` | content-free diagnostics page | WS-001 + GOAL-005 + PLUG-005 + EXT-001 |
-| 028 | SUP-001 | `QUEUED` | independent update authenticity | external signing infrastructure may gate production completion |
-| 029 | CI-001, DOC-001 | `BLOCKED` | final release-oracle hardening | major state-machine work merged |
+| 004 | SEC-002, SEC-003 | `DONE` | exact Desktop Principal | SEC-001; PR #5 merged as `b81019c` |
+| 005 | PLATFORM-001 | `DONE` | remove macOS from CI/release/publish support matrix | completed in 2.2.0 release contract |
+| 006 | **PLATFORM-002** | **`REVIEW`** | remove macOS runtime/helper/tests/current-support branches | SEC-002/SEC-003 merged |
+| 007 | **ID-001, SES-001** | **`READY`** | durable request ownership + session deletion fencing | serial gate: PLATFORM-002 must be `DONE` |
+| 008 | SEC-004, SEC-005, SEC-006, SEC-007 | `QUEUED` | restricted Desktop + least-privilege defaults | SEC-002, SEC-003 already done; after row 007 |
+| 009 | CI-001 | `QUEUED` | aggregate-suite contamination/timing stabilization | after row 008; REL-001/TEST-001/MCP-001 already done |
+| 010 | BRG-001 | `QUEUED` | bridge lifecycle generation | after row 009 |
+| 011 | BRG-002 | `BLOCKED` | final repair authority claim | BRG-001 |
+| 012 | WS-001 | `BLOCKED` | durable WorkspaceLease | SEC-001 + ID-001/SES-001; after BRG-002 |
+| 013 | GH-001 | `BLOCKED` | typed GitHub remote integration | SEC-001 + final SEC-004..SEC-007 policy vocabulary |
+| 014 | GOAL-001, GOAL-002 | `QUEUED` | reply-debt foundations | after GH-001 / BRG-002 |
+| 015 | GOAL-003 | `BLOCKED` | transactional Goal control store | GOAL-001, GOAL-002 |
+| 016 | GOAL-004 | `BLOCKED` | continuation debt disposition | GOAL-003 |
+| 017 | GOAL-005 | `BLOCKED` | helper Temporary Chat isolation | GOAL-004 |
+| 018 | PLUG-001 | `QUEUED` | refresh lease vs click attempt | after GOAL-005 |
+| 019 | PLUG-004 | `QUEUED` | exact npm installation root | after PLUG-001 |
+| 020 | PLUG-002 | `BLOCKED` | Playwright production/test parity | PLUG-001 if shared readiness state changes; after PLUG-004 |
+| 021 | PLUG-003 | `BLOCKED` | Memory production lifecycle acceptance | PLUG-002 |
+| 022 | PLUG-005 | `BLOCKED` | plugin health chain + diagnostics signals | PLUG-003 |
+| 023 | EXT-001 | `BLOCKED` | provider-private extension adapters | BRG-002 + GOAL-005 + PLUG-001 |
+| 024 | EXT-002 | `BLOCKED` | move durable orchestration main-side | EXT-001 |
+| 025 | AG-001, AG-002 | `QUEUED` | agent lookup + persistence efficiency | after EXT-002 |
+| 026 | BRG-003 | `QUEUED` | passive app-show browser opening removal | after PLATFORM-002 |
+| 027 | BRG-004 | `QUEUED` | localhost trust decision/hardening | after BRG-003 |
+| 028 | OBS-001 | `BLOCKED` | content-free diagnostics page | WS-001 + GOAL-005 + PLUG-005 + EXT-001 |
+| 029 | SUP-001 | `QUEUED` | independent update authenticity | external signing infrastructure may gate production completion |
+| 030 | CI-001, DOC-001 | `BLOCKED` | final release-oracle hardening | major state-machine work merged |
 
-`CI-001` appears in rows 007 and 029 because the audit deliberately has an early stabilization
+`CI-001` appears in rows 009 and 030 because the audit deliberately has an early stabilization
 tranche and a final release-oracle completion tranche. The audit ID remains `CI-001`; the scope text
 is what distinguishes the two PRs.
 

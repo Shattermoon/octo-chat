@@ -22,7 +22,7 @@ bytes from the recipe's tagged archive, so adjust the cache filename/hash accord
 TIFF and Fontconfig include mirrored source archives where original download endpoints
 were unavailable. Windows libxml2's recipe directory must resolve to `2.15`.
 
-## macOS and Linux
+## Linux
 
 Use sharp-libvips commit `6e5971d333377743163edc3ad9e5d0b897abcbc9` (v1.3.3).
 Its `build.sh`, `build/posix.sh`, `versions.properties` and `platforms/` directories
@@ -31,13 +31,10 @@ describe configuration and installation. The entry points are:
 ```sh
 ./build.sh linux-x64
 ./build.sh linux-arm64v8
-./build.sh darwin-x64
-./build.sh darwin-arm64v8
 ```
 
-Linux uses the supplied Dockerfiles; macOS uses Xcode command-line tools and Homebrew's
-pkg-config. Supply the retained source bodies to the corresponding CURL download steps
-instead of resolving moving tags again. Four external patches are included; the UltraHDR
+Linux uses the supplied Dockerfiles. Supply the retained source bodies to the corresponding
+CURL download steps instead of resolving moving tags again. Four external patches are included; the UltraHDR
 PR patch is pinned to its byte-identical commit patch. Preserve all inline `sed` edits,
 generated `vips.map`, static inner libraries, SONAME changes and linker flags in `posix.sh`.
 
@@ -91,18 +88,11 @@ retaining exported interfaces and library names. Under application resources:
 - Windows: `app.asar.unpacked/node_modules/@img/sharp-win32-{x64|arm64}/lib/`, with
   `libvips-42.dll` and `libvips-cpp-8.18.6.dll`.
 - Linux: `app.asar.unpacked/node_modules/@img/sharp-libvips-linux-{x64|arm64}/lib/`.
-- macOS: `app.asar.unpacked/node_modules/@img/sharp-libvips-darwin-{x64|arm64}/lib/`
-  under `Octo Chat.app/Contents/Resources`.
 
 Replace the corresponding shared libraries and retain required SONAME links. Sharp is
 also unpacked; its Apache-licensed binding source/build instructions are in the sharp
 source distribution if an ABI change requires rebuilding it. No application hash check
-or publisher-key requirement fences these files. On macOS seal the modified copy again:
-
-```sh
-codesign --force --deep --sign - "Octo Chat.app"
-codesign --verify --deep --strict --verbose=2 "Octo Chat.app"
-```
+or publisher-key requirement fences these files.
 
 On Linux extract an AppImage or use an installed DEB copy to obtain ordinary writable
 files. Normal OS access controls apply. Preserve source/license notices with modifications.

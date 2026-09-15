@@ -12,6 +12,7 @@ import {
 const roots: string[] = [];
 const originalPath = process.env.PATH;
 const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
 
 async function executable(file: string, contents: string): Promise<void> {
   await writeFile(file, contents);
@@ -25,6 +26,7 @@ afterEach(async () => {
     writable: true,
     value: originalResourcesPath
   });
+  Object.defineProperty(process, 'platform', originalPlatform);
   resetTunnelLocatorCacheForTests();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -65,17 +67,26 @@ describe('tunnel binary location', () => {
   });
 
   it('constructs native common-location fallbacks without leaking Windows paths onto POSIX', () => {
-    expect(commonBinaryDirsForPlatform('darwin', { HOME: '/Users/test' }, '/Users/test')).toEqual(
-      expect.arrayContaining(['/Users/test/.local/bin', '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'])
-    );
     expect(commonBinaryDirsForPlatform('linux', { HOME: '/home/test' }, '/home/test')).toEqual(
       expect.arrayContaining(['/home/test/.local/bin', '/usr/local/bin', '/usr/bin', '/snap/bin'])
     );
-    for (const candidate of [
-      ...commonBinaryDirsForPlatform('darwin', { HOME: '/Users/test' }, '/Users/test'),
-      ...commonBinaryDirsForPlatform('linux', { HOME: '/home/test' }, '/home/test')
-    ]) {
+    for (const candidate of commonBinaryDirsForPlatform('linux', { HOME: '/home/test' }, '/home/test')) {
       expect(candidate).not.toMatch(/^[A-Za-z]:\\|\\Program Files|\\Users\\/);
     }
+  });
+
+  it('discovers no tunnel binary on retired Darwin hosts', async () => {
+    const fakePath = await mkdtemp(path.join(os.tmpdir(), 'clf-tunnel-darwin-'));
+    roots.push(fakePath);
+    const fakeBinary = path.join(fakePath, 'tunnel-client');
+    await executable(fakeBinary, 'unsupported-host binary');
+    process.env.PATH = fakePath;
+    Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'darwin' });
+    resetTunnelLocatorCacheForTests();
+
+    expect(commonBinaryDirsForPlatform('darwin', { HOME: '/Users/test' }, '/Users/test')).toEqual([]);
+    // Even an explicit valid executable must not turn a retired platform into a supported one.
+    expect(locateBinary('tunnel-client', fakeBinary)).toBeNull();
+    expect(locateBinary('tunnel-client')).toBeNull();
   });
 });

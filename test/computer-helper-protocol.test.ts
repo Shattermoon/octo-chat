@@ -72,17 +72,13 @@ vi.mock('../src/main/exec.js', () => ({
 }));
 vi.mock('../src/main/logger.js', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }));
 
-// The child process is mocked, but Darwin still resolves the native host before spawn.
-// Point that resolver at a real executable so this test remains about protocol handling.
-vi.stubEnv('OCTO_MAOCTO_DESKTOP_HELPER', process.execPath);
-
 import { helperTimeoutMs, listWindows } from '../src/main/computer/index.js';
 
 describe('desktop helper protocol validation', () => {
-  it('budgets a macOS act request for cumulative focus polling', () => {
+  it('budgets a Windows act request for bounded drag duration', () => {
     const actions = Array.from({ length: 20 }, (_, index) => ({ type: 'focus', window: index + 1 }));
-    expect(helperTimeoutMs({ op: 'act', actions }, 'darwin')).toBe(57_000);
     expect(helperTimeoutMs({ op: 'act', actions }, 'win32')).toBe(15_000);
+    expect(helperTimeoutMs({ op: 'act', actions: [{ type: 'drag', durationMs: 350 }] }, 'win32')).toBe(15_350);
   });
 
   it('rejects syntactically valid JSON that is not a protocol response', async () => {

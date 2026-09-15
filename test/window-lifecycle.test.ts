@@ -7,7 +7,6 @@ import {
   supportsLoginStartup,
   createWindowActivationGate,
   ownsAppRuntime,
-  registerNativeWindowActivation,
   shouldBeginAppBootstrap,
   shouldQuitOnWindowAllClosed
 } from '../src/main/window-lifecycle.js';
@@ -116,28 +115,6 @@ describe('native window activation', () => {
     expect(show).toHaveBeenCalledTimes(1);
   });
 
-  it('reopens the app from the macOS Dock activation event', () => {
-    const listeners = new Map<string, () => void>();
-    const source = { on: vi.fn((event: 'activate', listener: () => void) => listeners.set(event, listener)) };
-    const show = vi.fn();
-    registerNativeWindowActivation(source, show, 'darwin');
-
-    expect(source.on).toHaveBeenCalledWith('activate', show);
-    listeners.get('activate')!();
-    expect(show).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(['win32', 'linux'] as const)('does not add a foreign activation contract on %s', (platform) => {
-    const source = { on: vi.fn() };
-    registerNativeWindowActivation(source, vi.fn(), platform);
-    expect(source.on).not.toHaveBeenCalled();
-  });
-
-  it('keeps a macOS app alive after its last window closes, regardless of close-to-tray preference', () => {
-    expect(shouldQuitOnWindowAllClosed('darwin', true)).toBe(false);
-    expect(shouldQuitOnWindowAllClosed('darwin', false)).toBe(false);
-  });
-
   it.each(['win32', 'linux'] as const)('keeps close-to-tray semantics on %s', (platform) => {
     expect(shouldQuitOnWindowAllClosed(platform, true)).toBe(false);
     expect(shouldQuitOnWindowAllClosed(platform, false)).toBe(true);
@@ -153,7 +130,7 @@ describe('Windows login startup', () => {
       [{ openAtLogin: true, path: 'C:/Program Files/Octo Chat/app.exe', args: ['--background'] }],
       [{ openAtLogin: false, path: 'C:/Program Files/Octo Chat/app.exe', args: ['--background'] }]
     ]);
-    for (const platform of ['darwin', 'linux'] as const) applyLoginStartup(app, true, platform);
+    applyLoginStartup(app, true, 'linux');
     app.isPackaged = false;
     applyLoginStartup(app, true, 'win32');
     expect(app.setLoginItemSettings).toHaveBeenCalledTimes(2);

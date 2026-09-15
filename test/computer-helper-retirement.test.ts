@@ -100,9 +100,6 @@ vi.mock('../src/main/exec.js', () => ({
 }));
 vi.mock('../src/main/logger.js', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }));
 
-// The child process is mocked, but Darwin still resolves the native host before spawn.
-vi.stubEnv('OCTO_MAOCTO_DESKTOP_HELPER', process.execPath);
-
 import { listWindows, stopComputerHelper } from '../src/main/computer/index.js';
 
 afterEach(() => {
@@ -124,14 +121,11 @@ describe('desktop helper retirement ordering', () => {
       }
     );
     await vi.waitFor(() => expect(fake.children[0]?.writeCount).toBe(1));
-    let script: string | undefined;
-    if (process.platform !== 'darwin') {
-      const [, args, options] = fake.spawn.mock.calls[0]!;
-      expect(args).toEqual(expect.arrayContaining(['-ExecutionPolicy', 'Bypass', '-File']));
-      script = args[args.indexOf('-File') + 1]!;
-      expect((await fs.readFile(script, 'utf8')).startsWith('\uFEFF')).toBe(true);
-      expect(options.env['CLF_HELPER']).toBeUndefined();
-    }
+    const [, args, options] = fake.spawn.mock.calls[0]!;
+    expect(args).toEqual(expect.arrayContaining(['-ExecutionPolicy', 'Bypass', '-File']));
+    const script = args[args.indexOf('-File') + 1]!;
+    expect((await fs.readFile(script, 'utf8')).startsWith('\uFEFF')).toBe(true);
+    expect(options.env['CLF_HELPER']).toBeUndefined();
     fake.children[0]!.emit('error', new Error('pipe broke'));
     await vi.waitFor(() => expect(fake.terminateProcessTree).toHaveBeenCalledWith(9000));
 
@@ -145,7 +139,7 @@ describe('desktop helper retirement ordering', () => {
     await observed;
     await expect(second).resolves.toEqual({ windows: [], screen: { x: 0, y: 0, width: 100, height: 100 } });
     expect(fake.spawn).toHaveBeenCalledTimes(2);
-    if (script) await expect(fs.stat(script)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(script)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('does not release the queue or spawn a replacement until a timed-out helper is dead', async () => {
@@ -186,7 +180,7 @@ describe('desktop helper retirement ordering', () => {
     expect(fake.spawn).toHaveBeenCalledTimes(2);
   });
 
-  it.runIf(process.platform !== 'darwin')('cancels startup before spawning if shutdown begins while the script is being written', async () => {
+  it('cancels startup before spawning if shutdown begins while the script is being written', async () => {
     const original = fs.writeFile.bind(fs);
     let release!: () => void;
     let script = '';

@@ -404,12 +404,8 @@ export async function assertCurrentCallLifecycle(): Promise<void> {
 function desktopNeedsExactPrincipal(name: string, args: unknown): boolean {
   if ((WINDOWS_COMPUTER_INPUT_METHODS as readonly string[]).includes(name)) return true;
   if (name === 'read_clipboard' || name === 'write_clipboard') return true;
-  if (name !== 'computer' || !args || typeof args !== 'object') return false;
-  const actions = (args as { actions?: unknown }).actions;
-  if (!Array.isArray(actions)) return false;
-  return actions.some(action =>
-    !!action && typeof action === 'object' && (action as { type?: unknown }).type !== 'wait'
-  );
+  void args;
+  return false;
 }
 
 /** The only SDK handler context field this layer consumes; request identity comes from ingress ALS. */

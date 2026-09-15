@@ -1,8 +1,3 @@
-/** Minimal app-event shape kept separate so macOS activation behavior is unit-testable. */
-export interface ActivateEventSource {
-  on(event: 'activate', listener: () => void): unknown;
-}
-
 /** Only the process that owns Electron's single-instance lock owns app runtime state/teardown. */
 export function ownsAppRuntime(hasSingleInstanceLock: boolean): boolean {
   return hasSingleInstanceLock;
@@ -54,29 +49,12 @@ export function createWindowActivationGate(showWindow: () => void): {
   };
 }
 
-/**
- * Closing the last ordinary window is not an application quit on macOS. The app stays in the
- * Dock/menu bar until the user explicitly quits (Cmd+Q / application menu / tray menu), and a
- * later `activate` recreates the window. Windows/Linux retain the existing preference semantics:
- * when close-to-tray is off, closing the last window exits the app.
- */
+/** When close-to-tray is off, closing the last window exits the supported app runtime. */
 export function shouldQuitOnWindowAllClosed(
-  platform: NodeJS.Platform,
+  _platform: NodeJS.Platform,
   minimizeToTray: boolean
 ): boolean {
-  return platform !== 'darwin' && !minimizeToTray;
-}
-
-/**
- * macOS users return to a hidden app through the Dock, which Electron reports as `activate`.
- * Windows/Linux use the tray/second-instance paths and should not gain a synthetic handler.
- */
-export function registerNativeWindowActivation(
-  source: ActivateEventSource,
-  showWindow: () => void,
-  platform: NodeJS.Platform = process.platform
-): void {
-  if (platform === 'darwin') source.on('activate', showWindow);
+  return !minimizeToTray;
 }
 
 /** Login launch is distinct from tunnel auto-connect and ordinary app activation. */

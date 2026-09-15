@@ -220,12 +220,9 @@ describe('Codex unified exec runtime parity', () => {
     ]);
   });
 
-  it('models macOS/Linux shell fallback policy without inventing a Windows shell', () => {
-    expect(posixShellPreference('darwin', null)).toEqual(['zsh', 'bash']);
+  it('models Linux shell fallback policy without inventing a Windows shell', () => {
     expect(posixShellPreference('linux', null)).toEqual(['bash', 'zsh']);
-    expect(posixShellPreference('darwin', 'bash')).toEqual(['bash', 'zsh']);
     expect(posixShellPreference('linux', 'zsh')).toEqual(['zsh', 'bash']);
-    expect(posixShellPreference('darwin', null)).not.toContain('powershell');
     expect(posixShellPreference('linux', null)).not.toContain('cmd');
   });
 

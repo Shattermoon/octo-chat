@@ -70,7 +70,7 @@ export const WRITE_CAPABILITIES: readonly Capability[] = [
 export type Capabilities = Record<Capability, boolean>;
 
 /** Host family reported to the renderer. */
-export type PlatformFamily = 'windows' | 'macos' | 'linux' | 'other';
+export type PlatformFamily = 'windows' | 'linux' | 'other';
 
 export interface PlatformInfo {
   family: PlatformFamily;
@@ -495,7 +495,7 @@ export interface BridgeStatus {
  * `stage` says what this installation is doing about it, and the pair reads as:
  * - `latest === null` — up to date, or nothing checked yet.
  * - `latest` set, `stage: 'idle'` — a new version exists that this installation cannot apply
- *   for itself (a Linux `.deb`, macOS, a development tree, an unsupported architecture). It is
+ *   for itself (a Linux `.deb`, a development tree, or an unsupported target). It is
  *   a manual download.
  * - `downloading` / `ready` — it is being fetched, or is fetched and installs on the next start.
  * - `failed` — the check or the download stopped; `error` says why, and the next check
@@ -535,15 +535,6 @@ export function isNewer(candidate: string, current: string): boolean {
   return false;
 }
 
-export type MacOSPermissionState = 'granted' | 'missing' | 'unknown';
-export interface MacOSDesktopAccessStatus {
-  /** Live preflights from the Swift backend executing inside the Electron process. */
-  screen: MacOSPermissionState;
-  accessibility: MacOSPermissionState;
-  checkedAt: number;
-  error: string | null;
-}
-
 /**
  * Whether the enabled product surface currently needs the companion browser extension.
  *
@@ -575,8 +566,6 @@ export interface AppState {
   bundledTunnelVersion: string | null;
   bridge: BridgeStatus;
   update: UpdateStatus;
-  /** Present only on macOS once the in-process native backend has reported its live TCC state. */
-  desktopAccess?: MacOSDesktopAccessStatus | null;
 }
 
 export const DEFAULT_CAPABILITIES: Capabilities = {
@@ -666,7 +655,6 @@ const CAPABILITY_TOOLS: Record<Capability, readonly string[]> = {
 /** Settings use the same Windows method lists as registration, with explicit host identity. */
 export function capabilityTools(capability: Capability, platform?: PlatformFamily): readonly string[] {
   if (!DESKTOP_CAPABILITIES.includes(capability)) return CAPABILITY_TOOLS[capability];
-  if (platform === 'macos') return CAPABILITY_TOOLS[capability];
   if (platform !== 'windows') return [];
   switch (capability) {
     case 'screen': return WINDOWS_COMPUTER_READ_METHODS;

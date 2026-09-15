@@ -5049,6 +5049,11 @@ describe('a worker chat that never opens', () => {
         await vi.advanceTimersByTimeAsync(ms);
         elapsed += ms;
       };
+      // Opening is deliberately downstream of the durable command-lease write. Under the
+      // aggregate suite those three serialized writes can exceed vi.waitFor's short polling
+      // budget even though delivery is healthy. Wait on the transaction itself rather than a
+      // wall-clock timeout; once durable state is flushed, the opener continuations have run.
+      await flushDurable();
       await vi.waitFor(() => expect(opened).toHaveLength(3));
       await request('GET', '/status');
       await advance(WORKER_REDEEM_MS + 1_000);

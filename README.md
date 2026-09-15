@@ -24,7 +24,7 @@ Octo Chat runs on your computer and gives ChatGPT a set of local MCP connectors.
 | --- | --- |
 | Windows 10/11 x64 / ARM64 | **Supported** — Core, Plugins, companion extension, and native Desktop automation |
 | Linux x64 / ARM64 | **Supported** — Core, Plugins, companion extension; no native Desktop automation |
-| macOS | **Temporarily unsupported** — current CI and releases do not publish macOS builds |
+| macOS | **Not supported** — no current build, CI, packaging target or native Desktop backend |
 
 Chrome, Edge, or Brave is required for the companion extension workflow.
 

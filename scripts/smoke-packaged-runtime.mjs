@@ -24,9 +24,6 @@ function packageRootCandidates() {
       ? [path.join(releaseDir, 'win-unpacked'), path.join(releaseDir, 'win-x64-unpacked')]
       : [path.join(releaseDir, 'win-arm64-unpacked')];
   }
-  if (targetPlatform === 'darwin') {
-    return targetArch === 'x64' ? [path.join(releaseDir, 'mac'), path.join(releaseDir, 'mac-x64')] : [path.join(releaseDir, 'mac-arm64')];
-  }
   return targetArch === 'x64'
     ? [path.join(releaseDir, 'linux-unpacked'), path.join(releaseDir, 'linux-x64-unpacked')]
     : [path.join(releaseDir, 'linux-arm64-unpacked')];
@@ -48,16 +45,8 @@ const upstreamOs = PLATFORM_INFO[targetPlatform].upstreamOs;
 const tunnelLicenseStem = `tunnel-client-${TUNNEL_CLIENT.version}-${upstreamOs}-${tunnelTarget.upstreamArch}`;
 const nativeDir = `${targetPlatform}-${targetArch}`;
 
-let resourcesDir;
-let appExecutable;
-if (targetPlatform === 'darwin') {
-  const appBundle = path.join(packageRoot, 'Octo Chat.app');
-  resourcesDir = path.join(appBundle, 'Contents', 'Resources');
-  appExecutable = path.join(appBundle, 'Contents', 'MacOS', 'Octo Chat');
-} else {
-  resourcesDir = path.join(packageRoot, 'resources');
-  appExecutable = path.join(packageRoot, targetPlatform === 'win32' ? 'Octo Chat.exe' : 'octo-chat');
-}
+const resourcesDir = path.join(packageRoot, 'resources');
+const appExecutable = path.join(packageRoot, targetPlatform === 'win32' ? 'Octo Chat.exe' : 'octo-chat');
 
 function required(relative) {
   const target = path.join(resourcesDir, ...relative.split('/'));
@@ -115,15 +104,10 @@ if (targetPlatform === 'win32') {
   required(`app.asar.unpacked/node_modules/@img/sharp-${targetPlatform}-${targetArch}/LICENSE`);
   // The pinned sharp-libvips 1.3.2 npm packages declare LGPL-3.0-or-later in package.json
   // but do not ship a LICENSE file. Require the metadata + version manifest they actually
-  // publish instead of making every macOS/Linux smoke test fail on an invented file.
+  // publish instead of making every Linux smoke test fail on an invented file.
   required(`app.asar.unpacked/node_modules/@img/sharp-libvips-${targetPlatform}-${targetArch}/package.json`);
   required(`app.asar.unpacked/node_modules/@img/sharp-libvips-${targetPlatform}-${targetArch}/versions.json`);
   required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/pty.node`);
-  if (targetPlatform === 'darwin') required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/spawn-helper`);
-  if (targetPlatform === 'darwin') {
-    required('desktop/macos-desktop-addon.node');
-    required('desktop/libocto-desktop.dylib');
-  }
 }
 
 const extensionManifest = JSON.parse(readFileSync(path.join(resourcesDir, 'extension', 'manifest.json'), 'utf8'));
@@ -191,12 +175,6 @@ const probe = String.raw`
   const parser = new Parser();
   parser.setLanguage(Bash);
   const tree = parser.parse('echo packaged-tree-sitter');
-  let desktop = null;
-  if (process.platform === 'darwin') {
-    const addon = require(base + '/desktop/macos-desktop-addon.node');
-    addon.initialize(base + '/desktop/libocto-desktop.dylib');
-    desktop = JSON.parse(addon.handle('{"op":"warm"}')).ready === true;
-  }
   const win = process.platform === 'win32';
   const terminal = pty.spawn(win ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh', win ? ['/d', '/s', '/c', 'echo packaged-pty'] : ['-lc', 'printf packaged-pty'], {
     cols: 80, rows: 24, cwd: process.cwd(), env: process.env
@@ -207,7 +185,7 @@ const probe = String.raw`
     terminal.onData((data) => { output += data; });
     terminal.onExit(({ exitCode }) => { clearTimeout(timer); exitCode === 0 ? resolve() : reject(new Error('node-pty child exited ' + exitCode)); });
   });
-  process.stdout.write(JSON.stringify({ version: manifest.version, electron: process.versions.electron, sharp: sharp.versions.sharp, vips: sharp.versions.vips, png: png.length, pty: output.includes('packaged-pty'), tree: tree.rootNode.type, desktop }) + '\n');
+  process.stdout.write(JSON.stringify({ version: manifest.version, electron: process.versions.electron, sharp: sharp.versions.sharp, vips: sharp.versions.vips, png: png.length, pty: output.includes('packaged-pty'), tree: tree.rootNode.type }) + '\n');
   process.exit(0);
 })().catch((error) => process.stderr.write(String(error?.stack || error) + '\n', () => process.exit(1)));`;
 
@@ -222,7 +200,7 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.status !== 0) process.exit(result.status ?? 1);
 const runtime = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1));
-if (runtime.version !== expectedVersion || runtime.electron !== expectedElectronVersion || !runtime.sharp || !runtime.vips || runtime.png <= 0 || !runtime.pty || runtime.tree !== 'program' || (targetPlatform === 'darwin' && runtime.desktop !== true)) {
+if (runtime.version !== expectedVersion || runtime.electron !== expectedElectronVersion || !runtime.sharp || !runtime.vips || runtime.png <= 0 || !runtime.pty || runtime.tree !== 'program') {
   throw new Error(`Packaged native runtime probe failed: ${JSON.stringify(runtime)}`);
 }
 process.stdout.write(`Packaged ${targetPlatform}-${targetArch} resources and native runtimes verified for ${expectedVersion}.\n`);

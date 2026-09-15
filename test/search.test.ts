@@ -8,7 +8,6 @@ import { makeTempDir, removeTempDir, writeTree } from './helpers.js';
 describe('ripgrep executable naming', () => {
   it('uses .exe only on Windows', () => {
     expect(ripgrepExecutableName('win32')).toBe('rg.exe');
-    expect(ripgrepExecutableName('darwin')).toBe('rg');
     expect(ripgrepExecutableName('linux')).toBe('rg');
   });
 });

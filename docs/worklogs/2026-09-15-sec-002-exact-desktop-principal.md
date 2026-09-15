@@ -1,10 +1,10 @@
-# [REVIEW][SEC-002][SEC-003] Exact Desktop Principal
+# [DONE][SEC-002][SEC-003] Exact Desktop Principal
 
 **Owner:** Repository maintainer
 
 **Branch:** `feat/sec-002-exact-desktop-principal`
 
-**State:** `REVIEW`
+**State:** `DONE`
 
 **Audit IDs:** SEC-002, SEC-003
 
@@ -148,6 +148,15 @@ so a later request cannot inherit an older registrar or operation classification
   ownership read is pending. ID-001/SES-001 still own the broader deletion/reconstruction generation
   fence. The SEC-001 worklog-state warning was stale: SEC-001 is already merged on `origin/main`, so
   its `DONE` state is correct.
-- Hosted Linux/Windows CI and the repository maintainer's exact-final-SHA self-review are still
-  required before merge and will be recorded on the pushed review head. CodeRabbit remains an
-  additional automated review signal, not a substitute for the maintainer's review judgment.
+- Final pushed head `55cbbc01238771bf2e3f6f77f39924781794075f` received multiple exact-head
+  read-only reviews with no High/Medium supported Windows/Linux blocker. Hosted run `34905980346`
+  completed successfully on both Linux x64 and Windows x64, including published-plugin exercise.
+  The aggregate local Windows oracle reproduced CI-001 resource/timing contamination; every affected
+  failure class reran clean in isolation, and the split hosted jobs were green.
+- CodeRabbit's substantive review was bound to older SHA `ca65939a718ce34a0b5145c7a74e7aeb32f98c03`.
+  Its generation, final-attachment and Windows observation-cache findings were validated and fixed;
+  its multiline suffix concern was disproved against the live clipboard-write policy; its SEC-001
+  state warning was stale. The remaining macOS frame/ref-ownership concern is removed rather than
+  repaired by PLATFORM-002. The stale `CHANGES_REQUESTED` review was dismissed with that disposition;
+  the final-head CodeRabbit status was green but rate-limited.
+- PR #5 merged on 2026-09-15 as `b81019cbe6504e8e5ef5243b58f3150049c546d1`.

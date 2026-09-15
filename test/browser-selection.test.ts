@@ -34,26 +34,18 @@ it('migrates a config without a browser choice to Chrome without losing its othe
   expect((await loadConfig()).ui).toMatchObject({ chatBrowser: 'chrome', autoConnect: true });
 });
 
-it('finds Edge installations on each platform without mixing in Chrome', () => {
+it('finds Edge installations on supported platforms without mixing in Chrome', () => {
   expect(preferredBrowserCandidates('win32', { LOCALAPPDATA: 'C:\\Local', ProgramFiles: 'C:\\Apps', 'ProgramFiles(x86)': 'C:\\Apps86' }, undefined, 'edge'))
     .toEqual(['C:\\Local\\Microsoft\\Edge\\Application\\msedge.exe', 'C:\\Apps\\Microsoft\\Edge\\Application\\msedge.exe', 'C:\\Apps86\\Microsoft\\Edge\\Application\\msedge.exe']);
-  const mac = preferredBrowserCandidates('darwin', {}, '/Users/example', 'edge');
-  expect(mac).toContain('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge');
-  expect(mac).toContain('/Users/example/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge');
-  expect(mac.every(candidate => candidate.includes('Microsoft Edge'))).toBe(true);
   const linux = preferredBrowserCandidates('linux', { PATH: '/custom/bin:/usr/bin' }, '/home/example', 'edge');
   expect(linux).toContain('/custom/bin/microsoft-edge');
   expect(linux).toContain('/usr/bin/microsoft-edge-stable');
   expect(linux.every(candidate => !/chrome|chromium/.test(candidate))).toBe(true);
 });
 
-it('finds Brave installations on each platform without mixing in Chrome or Edge', () => {
+it('finds Brave installations on supported platforms without mixing in Chrome or Edge', () => {
   expect(preferredBrowserCandidates('win32', { LOCALAPPDATA: 'C:\\Local', ProgramFiles: 'C:\\Apps', 'ProgramFiles(x86)': 'C:\\Apps86' }, undefined, 'brave'))
     .toEqual(['C:\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe', 'C:\\Apps\\BraveSoftware\\Brave-Browser\\Application\\brave.exe', 'C:\\Apps86\\BraveSoftware\\Brave-Browser\\Application\\brave.exe']);
-  const mac = preferredBrowserCandidates('darwin', {}, '/Users/example', 'brave');
-  expect(mac).toContain('/Applications/Brave Browser.app/Contents/MacOS/Brave Browser');
-  expect(mac).toContain('/Users/example/Applications/Brave Browser.app/Contents/MacOS/Brave Browser');
-  expect(mac.every(candidate => candidate.includes('Brave'))).toBe(true);
   const linux = preferredBrowserCandidates('linux', { PATH: '/custom/bin:/usr/bin' }, '/home/example', 'brave');
   expect(linux).toContain('/custom/bin/brave-browser');
   expect(linux).toContain('/usr/bin/brave-browser');

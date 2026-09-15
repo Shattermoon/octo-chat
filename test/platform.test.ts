@@ -28,7 +28,7 @@ const allCapabilities = (): Capabilities => ({
 });
 
 describe('cross-platform product surface', () => {
-  it('keeps Core available while masking Desktop on unsupported macOS builds', () => {
+  it('treats Darwin as unsupported while masking any stored Desktop grants', () => {
     const config = defaultConfig('darwin', '21.4.0');
     for (const capability of DESKTOP_CAPABILITIES) expect(config.capabilities[capability], capability).toBe(false);
     for (const capability of CAPABILITIES) {
@@ -79,8 +79,8 @@ describe('cross-platform product surface', () => {
   it('reports the host family and Desktop support explicitly', () => {
     expect(hostPlatformInfo('win32')).toEqual({ family: 'windows', name: 'Windows', desktopAutomation: true });
     expect(hostPlatformInfo('darwin', '21.4.0')).toEqual({
-      family: 'macos',
-      name: 'macOS',
+      family: 'other',
+      name: 'darwin',
       desktopAutomation: false
     });
     expect(hostPlatformInfo('linux')).toEqual({ family: 'linux', name: 'Linux', desktopAutomation: false });
@@ -88,7 +88,8 @@ describe('cross-platform product surface', () => {
     expect(capabilitiesForPlatform(allCapabilities(), 'win32')).toEqual(allCapabilities());
   });
 
-  it.each(['darwin', 'linux'] as const)('teaches POSIX shell semantics instead of Windows guidance on %s', (platform) => {
+  it('teaches Linux POSIX shell semantics instead of Windows guidance', () => {
+    const platform = 'linux' as const;
     const instructions = serverInstructions(
       {
         roots: [],
@@ -101,7 +102,7 @@ describe('cross-platform product surface', () => {
       platform
     );
 
-    expect(instructions).toContain(platform === 'darwin' ? 'Host: macOS.' : 'Host: Linux.');
+    expect(instructions).toContain('Host: Linux.');
     expect(instructions).toContain('normal POSIX shell');
     expect(instructions).not.toMatch(/PowerShell|Get-ChildItem|Windows desktop|Native Windows paths/);
   });
@@ -117,9 +118,8 @@ describe('cross-platform product surface', () => {
     expect(instructions).toContain('Octo Chat Desktop');
   });
 
-  it('uses a UTF-8 locale name native to each POSIX host', () => {
+  it('uses the supported Linux UTF-8 locale', () => {
     const environment = (platform: NodeJS.Platform) => new Map(unifiedExecEnvForPlatform(platform));
     expect(environment('linux').get('LC_ALL')).toBe('C.UTF-8');
-    expect(environment('darwin').get('LC_ALL')).toBe('en_US.UTF-8');
   });
 });

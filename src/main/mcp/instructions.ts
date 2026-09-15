@@ -58,8 +58,8 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
   const agentTools = ctx.agentTools ?? config.multiAgent.enabled;
   const caps = ctx.caps;
   const windows = platform === 'win32';
-  const desktop = windows || platform === 'darwin';
-  const host = platform === 'darwin' ? 'macOS' : platform === 'linux' ? 'Linux' : windows ? 'Windows' : 'local';
+  const desktop = windows;
+  const host = platform === 'linux' ? 'Linux' : windows ? 'Windows' : 'unsupported';
   const roots = ctx.roots.length
     ? ctx.roots.map(root => `/${root.name}${isGitRepository(root.path) ? ' (git)' : ''}`).join('  ')
     : 'None yet.';
@@ -133,60 +133,16 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
   return lines.join('\n');
 }
 
-function desktopInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
-  if (platform === 'win32') return windowsDesktopInstructions();
-  const host = platform === 'darwin' ? 'Mac' : 'Windows PC';
-  const paste = platform === 'darwin' ? 'command+v' : 'ctrl+v';
-  const lines = [
-    `Local desktop control: look at this ${host}’s screen and windows, and drive its mouse and keyboard.`,
-    '',
-    'observe first, then computer. Choose the task-specific window from observe what=windows, then inspect it with what=window.',
-    'A bare observe() returns the foreground window, its screenshot and accessibility controls. Observation does not activate the window.',
-    'Use click_ref/set_value for exposed controls; refs resolve the same control again when acted on.',
-    'Physical input requires the target window in front. Use computer focus to activate it; when something steals focus, observe first.',
-    'Coordinates are pixels of a screenshot frame. Coordinate actions require frameId so a click cannot land on a screen',
-    'whose owner or geometry has since changed. Batch related actions and use captureAfter to inspect the result; input acceptance alone does not prove the task succeeded.',
-    // Waiting was the single most repeated desktop pattern in the recorded sessions: a batch of
-    // nothing but a fixed sleep plus a screenshot, over and over, because the model had no way to
-    // say what it was waiting *for*. verify is that way, and it waits inside the one call.
-    'Do not poll with a batch that only waits. When an action needs time to take effect, say what you are',
-    'waiting for with verify — until foreground, window_exists, window_closed, ui_appears or ui_disappears —',
-    'and it waits for that condition and captures the result inside the same call.',
-    // Said here as well as in the schema: the clipboard is reached through computer rather
-    // than through a tool of its own, and a model looking for a "clipboard" tool finds none.
-    'The clipboard lives in computer too — read_clipboard and write_clipboard run in sequence with',
-    `the other actions, so copying text in and pasting it with keypress ${paste} is one call.`,
-    // The prime that closed its own chat with ctrl+w on 2026-09-02 was testing its game in a tab
-    // beside its ChatGPT chats. A chord cannot see which tab it lands on, so the rule is a window
-    // of its own, and the tool refuses the chords that would move between tabs or windows.
-    'A browser window here may be holding the ChatGPT chats this app runs. Open the page you are testing in a',
-    'browser window of its own, keep that window in front and act only there. Keyboard chords that close, open',
-    'or switch tabs or windows are refused. Address-bar focus chords are allowed for authorized navigation in the selected window.',
-
-    'Act only on what the user asked for and leave the rest of their desktop alone.'
-  ];
-
-  if (ctx.privacyScreenshots) {
-    lines.push(
-      '',
-      'Privacy screenshots are on: captures default to the active window rather than the whole screen.'
-    );
+function desktopInstructions(_ctx: ToolContext, platform: NodeJS.Platform): string {
+  if (platform !== 'win32') {
+    return `Octo Chat Desktop is supported only on Windows. Use "${surfaceDefinition('core').connectorName}" for Core tools.`;
   }
-
-  lines.push(
-    '',
-    `Files, patches and commands live in a separate connector, "${surfaceDefinition('core').connectorName}".`,
-    'This one cannot read or change files. If a task needs that and it is not available here, say so.'
-  );
-
-  lines.push('', CODE_MODE_INSTRUCTIONS, ...userInstructions());
-
-  return lines.join('\n');
+  return windowsDesktopInstructions();
 }
 
 function windowsDesktopInstructions(): string {
   return [
-    'Windows Computer Use uses the Window2 app/window interface. Use its named tools directly or call the same methods on sky inside this connector’s exec JavaScript. sky is supplied automatically; no package import or setup is needed. Mac uses a separate contract.',
+    'Windows Computer Use uses the Window2 app/window interface. Use its named tools directly or call the same methods on sky inside this connector’s exec JavaScript. sky is supplied automatically; no package import or setup is needed.',
     '',
     'Start with list_apps: each app has an id and its exact windows. list_windows lists currently open targetable windows; get_window rehydrates a returned id and optional app. Choose exactly one returned Window {app,id,title?}; never invent an app/window identity from a title or guessed process name.',
     'launch_app accepts an observed app id or a concrete .exe path/name. It requests launch without command arguments. Refresh list_apps/list_windows and choose the matching returned window to verify startup; launch acceptance is not a window receipt.',

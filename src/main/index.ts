@@ -69,11 +69,10 @@ import {
   isBackgroundLaunch,
   createWindowActivationGate,
   ownsAppRuntime,
-  registerNativeWindowActivation,
   shouldBeginAppBootstrap,
   shouldQuitOnWindowAllClosed
 } from './window-lifecycle.js';
-import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
+import { trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
 import { editContextMenuTemplate } from './edit-context-menu.js';
 
@@ -309,9 +308,8 @@ void app.whenReady().then(async () => {
   if (windowActivation.isDisabled()) return;
   try { applyLoginStartup(app, getConfig().ui.startAtLogin === true); }
   catch (error) { logWarn(`Windows login startup: ${error instanceof Error ? error.message : String(error)}`); }
-  // The renderer has its own explicit light/dark palette, so native chrome must follow the same
-  // user choice instead of Electron's default `system` theme. On macOS this controls the window
-  // frame, application menus and OS dialogs; on Linux/Windows it covers Electron-native UI.
+  // The renderer has its own explicit light/dark palette, so Electron-native chrome must follow
+  // the same user choice instead of Electron's default `system` theme.
   nativeTheme.themeSource = getConfig().ui.theme;
   const savedGoalObjectives = await readDurable<GoalObjectivesSnapshot>(GOAL_OBJECTIVES_STATE);
   if (windowActivation.isDisabled()) return;
@@ -419,12 +417,7 @@ void app.whenReady().then(async () => {
   );
   windowActivation.enable();
   if (!isBackgroundLaunch(process.argv)) windowActivation.request();
-  // macOS `activate` can fire on first launch, so do not wire it at module load where it could
-  // create a BrowserWindow before Electron is ready. Once the initial window path is established,
-  // Dock activation/re-launch can safely recreate or focus it.
-  registerNativeWindowActivation(app, windowActivation.request);
-
-  tray = new Tray(trayIcon(false), ...trayGuidArgsForPlatform());
+  tray = new Tray(trayIcon(false));
   tray.on('click', windowActivation.request);
   refreshTray();
   onStatusChange(refreshTray);
@@ -477,9 +470,8 @@ app.on('before-quit', () => {
 
 app.on('window-all-closed', () => {
   if (!ownsAppRuntime(hasSingleInstanceLock)) return;
-  // macOS convention: closing the last window is not quitting the application. The Dock/menu
-  // bar stay alive and `activate` recreates it. Windows/Linux retain the explicit close-to-tray
-  // preference; Cmd+Q / app.quit bypasses this event and still enters the shutdown sequence.
+  // Windows/Linux retain the explicit close-to-tray preference; app.quit bypasses this event and
+  // still enters the shutdown sequence.
   if (shouldQuitOnWindowAllClosed(process.platform, getConfig().ui.minimizeToTray)) app.quit();
 });
 

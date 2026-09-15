@@ -47,45 +47,6 @@ it.each([
   }
 );
 
-it('resolves late exact identity before the macOS composite computer surface can mutate', async () => {
-  const requestId = 'late-desktop-computer';
-  const run = vi.fn(async () => {
-    expect(currentCall()?.caller).toMatchObject({
-      requestId,
-      conversationId: 'desktop-computer-chat',
-      sessionId: 'desktop-computer-session'
-    });
-    return ok('mutated');
-  });
-  const pending = dispatch(
-    'computer',
-    { actions: [{ type: 'write_clipboard', text: 'fixture' }] },
-    null,
-    requestId,
-    'desktop',
-    run
-  );
-  await new Promise(resolve => setTimeout(resolve, 30));
-  expect(run).not.toHaveBeenCalled();
-  observeRequestCorrelation({
-    requestId,
-    conversationId: 'desktop-computer-chat',
-    sessionId: 'desktop-computer-session',
-    messageId: 'message-computer',
-    tool: 'computer',
-    observedAt: Date.now()
-  });
-  expect((await pending).isError).not.toBe(true);
-  expect(run).toHaveBeenCalledOnce();
-});
-
-it('does not require identity merely to run a local wait-only Desktop batch', async () => {
-  const run = vi.fn(async () => ok('waited'));
-  const result = await dispatch('computer', { actions: [{ type: 'wait', ms: 0 }] }, null, 'wait-only', 'desktop', run);
-  expect(result).toEqual(ok('waited'));
-  expect(run).toHaveBeenCalledOnce();
-});
-
 it('fail-closes an in-flight sensitive Desktop call when its exact attachment disappears', async () => {
   let resolveAttachment!: (value: 'current' | 'superseded' | 'unknown') => void;
   fixture.attachment.mockImplementationOnce(() => new Promise(resolve => { resolveAttachment = resolve; }));
