@@ -250,7 +250,7 @@ known exact Principal + capability enabled → existing behavior
 The 2.2.0 release matrix, CI, packaging targets and publication workflows already ship only
 Windows and Linux. PLATFORM-002 owns deletion of the dormant implementation that remained in source.
 
-#### [REVIEW][PLATFORM-002] — remove macOS runtime/helper/tests
+#### [DONE][PLATFORM-002] — remove macOS runtime/helper/tests
 
 **Owner:** Repository maintainer
 **Audit ID:** PLATFORM-002
@@ -260,7 +260,7 @@ Remove the dormant macOS Desktop helper/addon, package preparation/seal/smoke sc
 runtime/UI branches and mac-only tests. Preserve generic Linux POSIX behavior, shared dependency
 source/license inventory and stored Desktop capability choices that remain meaningful on Windows.
 
-#### [READY][ID-001][SES-001] — durable request ownership and session deletion fencing
+#### [ACTIVE][ID-001][SES-001] — durable request ownership and session deletion fencing
 
 **Owner:** Repository maintainer
 **Audit IDs:** ID-001, SES-001
@@ -688,8 +688,8 @@ be revised. The next implementation starts from current `main` only after the cu
 | 003 | FS-001 | `DONE` | no-follow symlink metadata boundary | none |
 | 004 | SEC-002, SEC-003 | `DONE` | exact Desktop Principal | SEC-001; PR #5 merged as `b81019c` |
 | 005 | PLATFORM-001 | `DONE` | remove macOS from CI/release/publish support matrix | completed in 2.2.0 release contract |
-| 006 | **PLATFORM-002** | **`REVIEW`** | remove macOS runtime/helper/tests/current-support branches | SEC-002/SEC-003 merged |
-| 007 | **ID-001, SES-001** | **`READY`** | durable request ownership + session deletion fencing | serial gate: PLATFORM-002 must be `DONE` |
+| 006 | PLATFORM-002 | `DONE` | remove macOS runtime/helper/tests/current-support branches | PR #9 merged as `4711721` |
+| 007 | **ID-001, SES-001** | **`ACTIVE`** | durable request ownership + session deletion fencing | PLATFORM-002 done; current implementation row |
 | 008 | SEC-004, SEC-005, SEC-006, SEC-007 | `QUEUED` | restricted Desktop + least-privilege defaults | SEC-002, SEC-003 already done; after row 007 |
 | 009 | CI-001 | `QUEUED` | aggregate-suite contamination/timing stabilization | after row 008; REL-001/TEST-001/MCP-001 already done |
 | 010 | BRG-001 | `QUEUED` | bridge lifecycle generation | after row 009 |
