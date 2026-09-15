@@ -413,6 +413,45 @@ describe('session deletion lifecycle fence', () => {
     expect((await indexedSessions()).filter((summary) => summary.chatIds.includes(sourceConversation))).toHaveLength(1);
   });
 
+  it('does not let a rebind claim a conversation while its existing session deletion is unresolved', async () => {
+    const sourceConversation = '11111111-1111-4111-8111-111111111111';
+    const targetConversation = '22222222-2222-4222-8222-222222222222';
+    const sourceId = await sessionForConversation(sourceConversation);
+    const targetId = await sessionForConversation(targetConversation);
+    expect(sourceId).toBeTruthy();
+    expect(targetId).toBeTruthy();
+
+    const commit = gate();
+    const realRename = fs.rename.bind(fs);
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(from) === path.join(sessionsRoot(), targetId!) && path.basename(String(to)).startsWith('.deleted-')) {
+        await commit.hold();
+        throw Object.assign(new Error('target deletion commit failed'), { code: 'EBUSY' });
+      }
+      return realRename(from, to);
+    });
+
+    const deleting = deleteSession(targetId!);
+    await commit.entered;
+
+    let rebound = false;
+    const rebinding = rebindSession(sourceId!, sourceConversation, targetConversation).then((value) => {
+      rebound = true;
+      return value;
+    });
+    await Promise.resolve();
+    expect(rebound).toBe(false);
+    expect((await findSessionByConversation(sourceConversation))?.id).toBe(sourceId);
+    expect((await getSession(sourceId!))?.conversationId).toBe(sourceConversation);
+
+    commit.release();
+    await expect(deleting).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(await rebinding).toBe(false);
+    expect((await findSessionByConversation(sourceConversation))?.id).toBe(sourceId);
+    expect((await findSessionByConversation(targetConversation))?.id).toBe(targetId);
+    expect((await indexedSessions()).filter((summary) => summary.conversationId === targetConversation)).toHaveLength(1);
+  });
+
   it('pruning skips a session that is in the middle of becoming live again', async () => {
     const summary = await createSession({ conversationId: 'prune-opening-race' });
     await endSession(summary.id);

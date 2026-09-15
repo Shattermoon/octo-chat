@@ -75,7 +75,8 @@ import {
   readEvents,
   readHandoff,
   refuseAutomaticCompactionNow,
-  rebindSession
+  rebindSession,
+  waitForConversationDeletionSettlement
 } from './store.js';
 
 /**
@@ -1261,6 +1262,8 @@ async function reconcileCommitting(entry: Continuation, toConversationId: string
   if (/^[0-9a-f-]{8,64}$/i.test(toConversationId)) {
     let target;
     try {
+      const deletion = waitForConversationDeletionSettlement(toConversationId);
+      if (deletion) await deletion;
       target = await findSessionByConversation(toConversationId, { requireUnique: true });
     } catch (err) {
       return { status: 'retryable', reason: `the destination chat ownership could not be checked: ${err instanceof Error ? err.message : String(err)}` };

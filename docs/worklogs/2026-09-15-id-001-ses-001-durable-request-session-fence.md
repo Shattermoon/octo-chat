@@ -98,6 +98,11 @@ At the merged base:
   attachment catalog before new creation can proceed.
 - The second production conversation-creation ingress, browser project binding in session input,
   applies the same delete wait/retry/superseded check before it may create a session.
+- Compact & Resume rebind now treats the destination conversation as a deletion-fenced claim: it waits
+  through any unresolved delete, rechecks a deletion-fenced miss, and reserves an existing target in
+  that target session's direct-work lifecycle before deciding the destination is already occupied.
+  Continuation performs the same pre-check; the store-level rebind fence remains authoritative for
+  callers that race the pre-check itself.
 - IPC keeps recorder attachment and chat-block state until tombstone rename succeeds. A failed commit
   therefore leaves the still-valid recorder epoch and block intact; a retry can delete cleanly.
 
@@ -117,8 +122,9 @@ history-only and snapshot-only owners remain recoverable.
 The SES-001 reviewer challenged creation initialization, queue-admission gaps, meta timers, cold
 reconstruction, direct asset/handoff work, duplicate deletes, prune races, partial recursive-delete
 failure, IPC detach-before-delete, failed-delete negative-cache/catalog restoration, current vs
-historical lineage, completely cold-store deletion and the separate session-input project-binding
-creation path. Each identified production path is now fenced or moved behind the atomic tombstone
+historical lineage, completely cold-store deletion, the separate session-input project-binding
+creation path, and finally a Compact & Resume rebind into a conversation whose existing session was
+already deleting. Each identified production path is now fenced or moved behind the atomic tombstone
 commit, with deterministic regressions for the race class.
 
 ## Local validation before review
@@ -127,12 +133,15 @@ commit, with deterministic regressions for the race class.
 - ID-001 focused durability/correlation suite — 39/39 pass after the final streamed-reducer design.
 - Specialist ID-001 re-review ran durable/correlation/full bridge coverage — 424/424 pass; no blocker
   in journal authority, strict legacy fallback, downgrade watermark semantics or `/correlations` ACK.
-- SES-001 deterministic deletion suite — 12/12 pass, covering paused reconstruction, in-flight create,
+- SES-001 deterministic deletion suite — 13/13 pass, covering paused reconstruction, in-flight create,
   assets, handoffs, duplicate delete/rename failure, failed-delete catalog restoration, cold recorder,
   completely cold-store lineage loading, historical Compact & Resume lineage, deletion starting during
-  the recorder's resume-settle wait, delete-vs-meta-flush, and prune-vs-open.
+  the recorder's resume-settle wait, delete-vs-meta-flush, prune-vs-open, and rebind-vs-existing-target
+  deletion rollback.
 - Latest SES/input/IPC/attribution focused set — 108/108 pass.
 - Latest ID-001 durability/backend/identity focused set — 59/59 pass.
+- Latest session/continuation/correlation/deletion regression bundle — 268/268 pass after the final
+  rebind destination fence.
 - Full deterministic session/ownership bundle — 8 files, 308/308 pass on the pre-final fence shape;
   the complete `test/session.test.ts` then passed 157/157 again on the final code shape after the
   project-binding/cache and resume-settle/create-admission fences.
@@ -169,6 +178,12 @@ commit, with deterministic regressions for the race class.
   owners and no surviving snapshot row after repeated v5 eviction; migration now fails closed there too.
 - `AGENTS.md` was corrected to name `state/request-owners.jsonl` as permanent authority, the old
   `request-correlations.json` as strict migration fallback, and the 50,000 bound as diagnostic-only.
+- A final SES-001 adversarial pass found a rebind TOCTOU that the original deletion suite did not cover:
+  `findSessionByConversation()` intentionally returns a deletion-fenced miss, so Compact & Resume could
+  treat a deleting destination as free and write a second durable owner. The store now waits for target
+  deletion settlement and reserves an existing target through its lifecycle direct-work set; the
+  continuation pre-check also joins the same deletion barrier. The new regression proves a failed target
+  delete cannot leave both sessions claiming the destination.
 
 ## Remaining review/merge gates
 

@@ -2735,11 +2735,53 @@ export async function rebindSession(
     // Browser conversation ids are UUID-like. A handful of store unit tests deliberately
     // use short symbolic ids and reuse them across retained temp sessions; ownership safety
     // applies to the real identity domain rather than manufacturing a test-only collision.
-    if (/^[0-9a-f-]{8,64}$/i.test(toConversationId)) {
-      const target = await findSessionByConversation(toConversationId, { requireUnique: true });
-      if (target && target.id !== id) {
-        logWarn(`session ${id} cannot move to ${toConversationId}: that chat already belongs to ${target.id}`);
-        return false;
+    const isBrowserConversation = /^[0-9a-f-]{8,64}$/i.test(toConversationId);
+    if (isBrowserConversation) {
+      for (;;) {
+        const pendingBeforeLookup = waitForConversationDeletionSettlement(toConversationId);
+        if (pendingBeforeLookup) await pendingBeforeLookup;
+
+        const target = await findSessionByConversation(toConversationId, { requireUnique: true });
+        if (!target || target.id === id) {
+          // A deletion can begin after the first wait but before the catalog lookup. Re-check the
+          // lifecycle after a deletion-fenced miss before declaring the destination available.
+          if (!target) {
+            const pendingAfterLookup = waitForConversationDeletionSettlement(toConversationId);
+            if (pendingAfterLookup) {
+              await pendingAfterLookup;
+              continue;
+            }
+          }
+          break;
+        }
+
+        // Reserve an existing target session in the same lifecycle domain as deletion. The direct
+        // work is registered synchronously before its first await, so a delete that starts after the
+        // lookup must either drain this collision check or be observed as `deleting` below.
+        try {
+          const reservation = await runDirectSessionWork(target.id, async () => {
+            const current = await findSessionByConversation(toConversationId, { requireUnique: true });
+            if (sessionLifecycles.get(target.id)?.state === 'deleting') return 'deleting' as const;
+            if (current?.id === target.id) return 'collision' as const;
+            return 'free' as const;
+          });
+          if (reservation === 'collision') {
+            logWarn(`session ${id} cannot move to ${toConversationId}: that chat already belongs to ${target.id}`);
+            return false;
+          }
+          if (reservation === 'deleting') {
+            const pending = waitForConversationDeletionSettlement(toConversationId);
+            if (pending) await pending;
+            continue;
+          }
+        } catch (error) {
+          const pending = waitForConversationDeletionSettlement(toConversationId);
+          if (pending) {
+            await pending;
+            continue;
+          }
+          throw error;
+        }
       }
     }
     const staged: SessionSummary = {
