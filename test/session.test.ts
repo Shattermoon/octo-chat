@@ -16,6 +16,7 @@ import { lineDelta, formatDelta } from '../src/main/diffstat.js';
 import { chunkText } from '../src/main/mcp/tools.js';
 import { emptyEvidence } from '../src/main/mcp/call-context.js';
 import { getLog } from '../src/main/logger.js';
+import { initDurableStore, resetDurableForTests } from '../src/main/durable.js';
 import {
   closeConversation,
   liveConversations,
@@ -85,11 +86,13 @@ beforeAll(async () => {
   dir = await makeTempDir('clf-session-');
   initConfigPath(dir);
   initSessionStore(dir);
+  initDurableStore(dir);
   await enableRecording();
 });
 
 afterAll(async () => {
   resetSessionStoreForTests();
+  resetDurableForTests();
   await removeTempDir(dir);
 });
 
@@ -1813,7 +1816,7 @@ describe('handoff storage', () => {
     const realReaddir = fs.readdir.bind(fs);
     const realReadFile = fs.readFile.bind(fs);
     const realStat = fs.stat.bind(fs);
-    const realRm = fs.rm.bind(fs);
+    const realRename = fs.rename.bind(fs);
     const removed: string[] = [];
 
     const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(
@@ -1856,22 +1859,22 @@ describe('handoff storage', () => {
         return (realStat as (...callArgs: unknown[]) => ReturnType<typeof fs.stat>)(target, ...args);
       }) as typeof fs.stat
     );
-    const rmSpy = vi.spyOn(fs, 'rm').mockImplementation(
-      (async (target: Parameters<typeof fs.rm>[0], ...args: unknown[]) => {
-        const id = path.basename(String(target));
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(
+      (async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
+        const id = path.basename(String(from));
         if (id.startsWith('prune-')) {
           removed.push(id);
           return;
         }
-        return (realRm as (...callArgs: unknown[]) => ReturnType<typeof fs.rm>)(target, ...args);
-      }) as typeof fs.rm
+        return realRename(from, to);
+      }) as typeof fs.rename
     );
 
     try {
       expect(await pruneSessions(30)).toBe(1);
       expect(removed).toEqual([targetId]);
     } finally {
-      rmSpy.mockRestore();
+      renameSpy.mockRestore();
       statSpy.mockRestore();
       readSpy.mockRestore();
       readdirSpy.mockRestore();

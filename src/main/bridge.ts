@@ -1677,11 +1677,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // here without feeding contradictory evidence into the sticky conflict registry. No tool
     // name, clock, active-tab or nearest-turn fallback participates.
     const requestIds = [...new Set(calls.map((call) => call.requestId).filter((value): value is string => Boolean(value)))];
-    const conflicts = requestIds.filter((requestId) => {
+    const conflictsBeforeCommit = requestIds.filter((requestId) => {
       const held = requestCorrelation(requestId);
       return held !== null && held.conversationId !== id;
     });
-    const blocked = new Set(conflicts);
+    const blocked = new Set(conflictsBeforeCommit);
     const unresolved = calls.filter((call) => call.requestId && !blocked.has(call.requestId) && requestCorrelation(call.requestId) === null);
     const observations: ChatObservation[] = unresolved.length > 0
       ? [{ kind: 'tool_evidence', time: Date.now(), calls: unresolved }]
@@ -1690,6 +1690,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // first-observation semantics and making this one atomic operation from the page's view.
     const sessionId = await recordRequestEvidence(id, observations);
     const confirmed = requestIds.filter((requestId) => requestCorrelation(requestId)?.conversationId === id);
+    // Re-evaluate after the serialized durable admission. Two chats can race a previously unseen
+    // id: the winner commits first; the loser must report that now-proven owner as a conflict,
+    // rather than returning an ambiguous incomplete response based on the pre-commit snapshot.
+    const conflicts = requestIds.filter((requestId) => {
+      const held = requestCorrelation(requestId);
+      return held !== null && held.conversationId !== id;
+    });
     return json(res, 200, {
       ok: true,
       conversationId: id,

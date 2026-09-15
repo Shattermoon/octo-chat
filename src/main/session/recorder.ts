@@ -58,12 +58,13 @@ import {
   rewriteUnattributedToolCalls,
   setSessionOrigin,
   upsertMessageEvent,
+  waitForConversationDeletionSettlement,
   writeAsset,
   writeOverflowText
 } from './store.js';
 import {
   awaitRequestCorrelation,
-  observeRequestCorrelations,
+  commitRequestCorrelations,
   requestCorrelation,
   resetCorrelationRegistryForTests,
 } from './correlation.js';
@@ -265,9 +266,22 @@ async function initializeSessionForConversation(
     await promoteGenericTitle(existing.sessionId, title);
     return existing.sessionId;
   }
+  // A completely cold explicit delete can fence the session before it has loaded the durable
+  // conversation lineage. Join that short preparation window before asking the attachment index:
+  // otherwise this lookup could cache "missing" and create a replacement while the old canonical
+  // directory is still in an unresolved delete transaction.
+  const preparingDelete = waitForConversationDeletionSettlement(conversationId);
+  if (preparingDelete) await preparingDelete;
   // Reuse a session already recorded for this conversation, so closing and reopening
   // the tab continues the same history instead of fragmenting it.
   let known = await findSessionByConversation(conversationId);
+  if (!known) {
+    const deleting = waitForConversationDeletionSettlement(conversationId);
+    if (deleting) {
+      await deleting;
+      known = await findSessionByConversation(conversationId);
+    }
+  }
   if (!known && resumeOpeningChat()) {
     // A compaction is opening its replacement chat right now, and this unknown conversation
     // may be it. Creating a session here is what breaks the move: the commit that follows
@@ -283,6 +297,17 @@ async function initializeSessionForConversation(
       return moved.sessionId;
     }
     known = await findSessionByConversation(conversationId);
+  }
+  // The resume-settle await above is long enough for an explicit delete to begin after our earlier
+  // ownership checks. Join it here, immediately before the final superseded/create decision, then
+  // re-read durable ownership. `createSession` also has a final synchronous delete-admission fence
+  // so a delete that starts during any later title/project await fails closed rather than forking.
+  if (!known) {
+    const deleting = waitForConversationDeletionSettlement(conversationId);
+    if (deleting) {
+      await deleting;
+      known = await findSessionByConversation(conversationId);
+    }
   }
   if (!known && (await conversationWasSuperseded(conversationId))) {
     // Compact & Resume moved this chat's session onto its replacement. Whatever the old page
@@ -761,13 +786,13 @@ function scheduleAttributionRepair(requestId: string): void {
  * resolves a moment later, so the batch is worth nothing as evidence and worth nothing as a
  * verdict either.
  */
-function noteCallEvidence(
+async function noteCallEvidence(
   conversationId: string,
   sessionId: string,
   fiberConversationId: string | null | undefined,
   calls: readonly PageCallEvidence[],
   at: number
-): void {
+): Promise<void> {
   if (fiberConversationId && fiberConversationId !== conversationId) {
     // Name the discarded ids. Without them this line says a batch was dropped but not
     // *which* calls it cost, so a chat whose every call lands in Unattributed activity
@@ -789,7 +814,7 @@ function noteCallEvidence(
   const priorOwners = new Map(
     evidencedCalls.map((call) => [call.requestId, requestCorrelation(call.requestId)?.conversationId ?? null] as const)
   );
-  const results = observeRequestCorrelations(
+  const results = await commitRequestCorrelations(
     evidencedCalls.map((call) => ({
       requestId: call.requestId,
       conversationId,
@@ -1783,7 +1808,7 @@ export async function recordRequestEvidence(
   // as superseded. Never turn an exact historical owner into anonymous executable authority.
   for (const item of observations) {
     if (item.kind === 'tool_evidence' && item.calls?.length) {
-      noteCallEvidence(conversationId, sessionId, item.fiberConversationId, item.calls, item.time);
+      await noteCallEvidence(conversationId, sessionId, item.fiberConversationId, item.calls, item.time);
     }
   }
   return sessionId;

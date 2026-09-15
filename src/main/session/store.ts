@@ -118,6 +118,7 @@ function rememberMissingCurrentConversation(conversationId: string): void {
 
 export function initSessionStore(userDataDir: string): void {
   root = path.join(userDataDir, 'sessions');
+  sessionLifecycles.clear();
   sessionAssetUsage.clear();
   globalAssetUsage = null;
   missingCurrentConversations.clear();
@@ -187,6 +188,68 @@ interface DurableSessionSnapshot {
 }
 /** Read-only recovery also shares one durable high-water check/rebuild per session. */
 const reconciling = new Map<string, Promise<DurableSessionSnapshot | null>>();
+
+type SessionLifecycleState = 'active' | 'deleting' | 'deleted';
+interface SessionLifecycle {
+  generation: number;
+  state: SessionLifecycleState;
+  /** Full durable chat lineage captured when deletion starts; survives loss of open/catalog overlays. */
+  deletingChatIds: string[];
+  /** False only while a cold delete is loading durable lineage before the rename commit point. */
+  deletingLineageReady: boolean;
+  /** Direct writes that do not run through OpenSession.queue (assets, handoffs, creation). */
+  direct: Set<Promise<unknown>>;
+  /** Coalesces duplicate explicit deletion requests. */
+  deletePromise: Promise<unknown> | null;
+}
+const sessionLifecycles = new Map<string, SessionLifecycle>();
+
+function lifecycleFor(id: string): SessionLifecycle {
+  let lifecycle = sessionLifecycles.get(id);
+  if (!lifecycle) {
+    lifecycle = {
+      generation: 0,
+      state: 'active',
+      deletingChatIds: [],
+      deletingLineageReady: true,
+      direct: new Set(),
+      deletePromise: null
+    };
+    sessionLifecycles.set(id, lifecycle);
+  }
+  return lifecycle;
+}
+
+function sessionIsActive(id: string): boolean {
+  // Absence is the default active generation. Read-only identity/catalog scans must not grow the
+  // lifecycle map merely by observing retained session ids; mutation paths call lifecycleFor().
+  const state = sessionLifecycles.get(id)?.state;
+  return state === undefined || state === 'active';
+}
+
+function assertSessionActive(id: string): SessionLifecycle {
+  const lifecycle = lifecycleFor(id);
+  if (lifecycle.state !== 'active') throw new Error(`Session ${id} is being deleted or has been deleted`);
+  return lifecycle;
+}
+
+function assertSessionGeneration(id: string, generation: number): void {
+  const lifecycle = lifecycleFor(id);
+  if (lifecycle.state !== 'active' || lifecycle.generation !== generation) {
+    throw new Error(`Session ${id} changed lifecycle while work was in flight`);
+  }
+}
+
+function runDirectSessionWork<T>(id: string, action: () => Promise<T>): Promise<T> {
+  const lifecycle = assertSessionActive(id);
+  const work = Promise.resolve().then(action);
+  lifecycle.direct.add(work);
+  void work.then(
+    () => lifecycle.direct.delete(work),
+    () => lifecycle.direct.delete(work)
+  );
+  return work;
+}
 const MAX_EVENT_TAIL = 4096;
 /** Hard ceiling for a bounded recent-history disk read. */
 const MAX_RECENT_READ_BYTES = 8 * 1024 * 1024;
@@ -327,7 +390,8 @@ async function writeMeta(entry: OpenSession): Promise<void> {
   entry.metaDirty = false;
 }
 
-function enqueueSessionOperation<T>(entry: OpenSession, label: string, operation: () => Promise<T>): Promise<T> {
+async function enqueueSessionOperation<T>(entry: OpenSession, label: string, operation: () => Promise<T>): Promise<T> {
+  assertSessionActive(entry.summary.id);
   const work = entry.queue.then(operation);
   entry.queue = work.then(
     () => undefined,
@@ -343,6 +407,7 @@ function enqueueSessionOperation<T>(entry: OpenSession, label: string, operation
  */
 function scheduleMeta(entry: OpenSession): void {
   entry.metaDirty = true;
+  if (!sessionIsActive(entry.summary.id)) return;
   if (entry.metaTimer) return;
   entry.metaTimer = setTimeout(() => {
     entry.metaTimer = null;
@@ -398,12 +463,22 @@ export async function createSession(options: {
   origin?: SessionOrigin | null;
 }): Promise<SessionSummary> {
   const id = `${new Date().toISOString().slice(0, 10)}-${randomUUID().slice(0, 8)}`;
+  const lifecycle = lifecycleFor(id);
+  lifecycle.state = 'active';
+  const generation = lifecycle.generation;
   const summary = emptySummary(id, options.title?.trim() || 'ChatGPT session', options.conversationId ?? null);
   summary.origin = options.origin ?? null;
   if (options.titleSource) summary.titleSource = options.titleSource;
   if (options.origin?.fromSessionId) {
     const source = await getSession(options.origin.fromSessionId);
     if (source?.projectId) summary.projectId = source.projectId;
+  }
+  // Conversation-bearing creation is the final admission boundary for every caller, not only the
+  // recorder. If deletion began during an earlier await (for example project inheritance), fail
+  // closed before publishing `open`: the caller may retry after the existing owner commits or
+  // rolls back, but it must never mint a parallel epoch while ownership is unresolved.
+  if (summary.conversationId && waitForConversationDeletionSettlement(summary.conversationId)) {
+    throw new Error(`Conversation ${summary.conversationId} has a session deletion in flight`);
   }
   // Invalidate before exposing the in-flight live entry. A cached miss must never hide a
   // session that this process has started creating, even while its first durable write awaits.
@@ -421,12 +496,20 @@ export async function createSession(options: {
     metaTimer: null
   };
   open.set(id, entry);
-  try {
+  const initialize = runDirectSessionWork(id, async () => {
     await fs.mkdir(sessionDir(id), { recursive: true });
     await fs.writeFile(path.join(sessionDir(id), 'events.jsonl'), '', { flag: 'a' });
     await fs.writeFile(path.join(sessionDir(id), 'messages.json'), '{}', { flag: 'a' });
     await writeMeta(entry);
-    publishAttachmentSummary(entry.summary);
+    if (sessionIsActive(id) && lifecycleFor(id).generation === generation) publishAttachmentSummary(entry.summary);
+  });
+  entry.queue = initialize.then(
+    () => undefined,
+    (err: Error) => logError(`session initialization failed: ${err.message}`)
+  );
+  try {
+    await initialize;
+    assertSessionGeneration(id, generation);
   } catch (error) {
     if (open.get(id) === entry) open.delete(id);
     throw error;
@@ -727,6 +810,7 @@ async function rebuildSummaryFromHistory(
  */
 async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot | null> {
   assertSessionId(id);
+  if (!sessionIsActive(id)) return null;
   const existing = reconciling.get(id);
   if (existing) return existing;
   const work = (async () => {
@@ -782,12 +866,14 @@ async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot |
 }
 
 async function readAuthoritativeSummary(id: string): Promise<SessionSummary | null> {
+  if (!sessionIsActive(id)) return null;
   const live = open.get(id);
   if (live) return live.summary;
   const becomingLive = opening.get(id);
   if (becomingLive) return (await becomingLive).summary;
   const snapshot = await readDurableSnapshot(id);
   if (!snapshot) return null;
+  if (!sessionIsActive(id)) return null;
   // If a process-lifetime catalog already exists, or one is concurrently being built and may
   // already have passed this row, invalidate/update it after a recovery write. The catalog's own
   // build calls readDurableSnapshot directly, so its normal stale-row repairs do not self-loop.
@@ -799,6 +885,8 @@ async function readAuthoritativeSummary(id: string): Promise<SessionSummary | nu
 
 async function ensureOpen(id: string): Promise<OpenSession> {
   assertSessionId(id);
+  const lifecycle = assertSessionActive(id);
+  const generation = lifecycle.generation;
   const existing = open.get(id);
   if (existing) return existing;
   const inFlight = opening.get(id);
@@ -807,6 +895,7 @@ async function ensureOpen(id: string): Promise<OpenSession> {
     await sealTornTail(id);
     const snapshot = await readDurableSnapshot(id);
     if (!snapshot) throw new Error(`Session ${id} has no recoverable metadata or history`);
+    assertSessionGeneration(id, generation);
     const entry: OpenSession = {
       summary: snapshot.summary,
       nextSeq: snapshot.historySeq + 1,
@@ -976,7 +1065,7 @@ export function appendEvent(sessionId: string, event: NewSessionEvent): Promise<
     // persist meta.json claiming events/tool calls/tokens that never existed in events.jsonl.
     // Keep the append-only journal authoritative: nothing in memory advances until the line
     // is on disk.
-    const write = entry.queue.then(async () => {
+    return enqueueSessionOperation(entry, 'append', async () => {
       const full = { ...event, seq: entry.nextSeq } as SessionEvent;
       const line = `${JSON.stringify(full)}\n`;
       if (Buffer.byteLength(line, 'utf8') > MAX_LINE_BYTES) {
@@ -1008,13 +1097,6 @@ export function appendEvent(sessionId: string, event: NewSessionEvent): Promise<
       scheduleMeta(entry);
       return full;
     });
-    entry.queue = write.then(
-      () => undefined,
-      (err: Error) => {
-        logError(`session append failed: ${err.message}`);
-      }
-    );
-    return write;
   });
 }
 
@@ -1033,7 +1115,7 @@ export function upsertMessageEvent(
   const directKey = messageKey(event as MessageEvent);
   if (!directKey) throw new Error('Canonical message update requires ChatGPT messageId');
   return ensureOpen(sessionId).then((entry) => {
-    const write = entry.queue.then(async () => {
+    return enqueueSessionOperation(entry, 'message upsert', async () => {
       // Provider create_time can change after a tab reload while the actual message
       // UUID stays identical. Preserve the first canonical anchor on that exact
       // evidence; never collapse distinct authored segments by working-turn tuple
@@ -1195,11 +1277,6 @@ export function upsertMessageEvent(
       scheduleMeta(entry);
       return { event: full, changed: true, contentChanged: !sameMessage };
     });
-    entry.queue = write.then(
-      () => undefined,
-      (err: Error) => logError(`session message upsert failed: ${err.message}`)
-    );
-    return write;
   });
 }
 
@@ -1345,6 +1422,158 @@ export async function readEvents(sessionId: string, options: ReadOptions = {}): 
     return chronological(page);
   }
   return chronological(out).slice(0, limit);
+}
+
+export interface RequestOwnerMigrationEvidence {
+  requestId: string;
+  conversationId: string;
+  sessionId: string;
+  messageId: string;
+  tool: string;
+  observedAt: number;
+}
+
+export interface RequestOwnerMigrationRead {
+  /** Byte offset immediately after the last fully committed newline-terminated row. */
+  committedBytes: number;
+}
+
+/** Every session folder, even if metadata is damaged; ownership recovery cannot depend on UI validity. */
+export async function sessionIdsForRequestOwnerMigration(): Promise<string[]> {
+  assertReady();
+  try {
+    const names = await fs.readdir(root);
+    return names.filter((name) => /^[0-9a-z-]{8,64}$/i.test(name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+/**
+ * Strict one-time reader for immutable request-owner migration.
+ *
+ * Ordinary history reads deliberately tolerate damaged committed rows so one bad display row does
+ * not cost an entire session. Ownership migration is different: silently skipping a committed row
+ * could forget the first owner of a request id forever. Only a final unterminated crash fragment is
+ * known not to have crossed its append boundary and may therefore be ignored.
+ */
+export async function scanRequestOwnerEvidenceForMigration(
+  sessionId: string,
+  fromByte = 0,
+  onEvidence: (evidence: RequestOwnerMigrationEvidence) => void
+): Promise<RequestOwnerMigrationRead> {
+  assertSessionId(sessionId);
+  await flushSession(sessionId);
+  const file = path.join(sessionDir(sessionId), 'events.jsonl');
+  let size: number;
+  try {
+    size = (await fs.stat(file)).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { committedBytes: 0 };
+    throw error;
+  }
+
+  let offset = Number.isSafeInteger(fromByte) && fromByte >= 0 && fromByte <= size ? fromByte : 0;
+  // Exact size equality is the steady-state fast path: this watermark was written only after we
+  // parsed through a committed newline at this byte offset. Event history is append-only on this
+  // authority path, so an unchanged size needs no JSONL open/read at all.
+  if (offset === size) return { committedBytes: offset };
+  if (offset > 0) {
+    // A watermark written by us always ends immediately after '\n'. If an old binary truncated or
+    // rewrote the file, do not trust an offset that no longer lands on that committed boundary.
+    const handle = await fs.open(file, 'r');
+    try {
+      const byte = Buffer.alloc(1);
+      await handle.read(byte, 0, 1, offset - 1);
+      if (byte[0] !== 0x0a) offset = 0;
+    } finally {
+      await handle.close();
+    }
+  }
+  const accept = (line: Buffer): void => {
+    if (line.length === 0) return;
+    if (line.length > MAX_LINE_BYTES) {
+      throw new Error(`Session ${sessionId} contains an oversized committed event row during request-owner migration`);
+    }
+    const text = line.toString('utf8');
+    if (!text.trim()) return;
+    let event: SessionEvent;
+    try {
+      event = JSON.parse(text) as SessionEvent;
+    } catch {
+      throw new Error(`Session ${sessionId} contains a malformed committed event row during request-owner migration`);
+    }
+    if (typeof event?.seq !== 'number' || typeof event?.kind !== 'string') {
+      throw new Error(`Session ${sessionId} contains an invalid committed event row during request-owner migration`);
+    }
+    if (event.kind !== 'tool_call' || event.call.attributionMethod !== 'request_id') return;
+    if (
+      typeof event.call.requestId !== 'string' || event.call.requestId.length === 0 ||
+      typeof event.call.conversationId !== 'string' || event.call.conversationId.length === 0 ||
+      typeof event.call.callId !== 'string' || event.call.callId.length === 0 ||
+      typeof event.call.tool !== 'string' ||
+      typeof event.time !== 'number' || !Number.isFinite(event.time)
+    ) {
+      throw new Error(`Session ${sessionId} contains invalid committed request-owner evidence`);
+    }
+    onEvidence({
+      requestId: event.call.requestId,
+      conversationId: event.call.conversationId,
+      sessionId,
+      messageId: `stored:${event.call.callId}`,
+      tool: event.call.tool,
+      observedAt: event.time
+    });
+  };
+
+  // Migration can legitimately start from byte zero on years of retained history. Stream fixed-size
+  // chunks and retain only the one incomplete row so startup memory is bounded by one event line, not
+  // by the full events.jsonl suffix. A final unterminated fragment remains crash residue and is ignored.
+  const handle = await fs.open(file, 'r');
+  const chunk = Buffer.alloc(64 * 1024);
+  let carry = Buffer.alloc(0);
+  let oversizedTail = false;
+  let position = offset;
+  let committedBytes = offset;
+  try {
+    while (position < size) {
+      const wanted = Math.min(chunk.length, size - position);
+      const { bytesRead } = await handle.read(chunk, 0, wanted, position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      const incoming = chunk.subarray(0, bytesRead);
+
+      // Once an unterminated row exceeds the event-line bound, it can still be a crash tail and is
+      // ignored at EOF. If a later newline commits it, however, migration must fail closed.
+      if (oversizedTail) {
+        if (incoming.indexOf(0x0a) >= 0) {
+          throw new Error(`Session ${sessionId} contains an oversized committed event row during request-owner migration`);
+        }
+        continue;
+      }
+
+      const joined = carry.length ? Buffer.concat([carry, incoming]) : incoming;
+      let start = 0;
+      for (;;) {
+        const newline = joined.indexOf(0x0a, start);
+        if (newline < 0) break;
+        accept(joined.subarray(start, newline));
+        start = newline + 1;
+      }
+      committedBytes += start;
+      const remainder = joined.subarray(start);
+      if (remainder.length > MAX_LINE_BYTES) {
+        carry = Buffer.alloc(0);
+        oversizedTail = true;
+      } else {
+        carry = Buffer.from(remainder);
+      }
+    }
+  } finally {
+    await handle.close();
+  }
+  return { committedBytes };
 }
 
 /**
@@ -1567,6 +1796,7 @@ export async function rewriteUnattributedToolCalls(
 ): Promise<{ retained: number; deleted: boolean }> {
   assertSessionId(sessionId);
   const entry = await ensureOpen(sessionId);
+  assertSessionActive(sessionId);
   const rewrite = entry.queue.then(async () => {
     if (entry.summary.conversationId !== null || entry.summary.title !== 'Unattributed activity') {
       throw new Error(`Session ${sessionId} is not an Unattributed activity bucket`);
@@ -1608,13 +1838,32 @@ export async function rewriteUnattributedToolCalls(
     // Only the recorder can prove this is not its writable bucket: a live call may hold
     // that bucket's id while preparing assets outside this queue. For inactive history,
     // the empty check and deletion share the same queue operation as concurrent-row capture.
-    if (deleteEmpty && retainedCalls.length === 0 && entry.queue === settled) {
-      if (entry.metaTimer) clearTimeout(entry.metaTimer);
-      await fs.rm(sessionDir(sessionId), { recursive: true, force: true });
-      if (open.get(sessionId) === entry) open.delete(sessionId);
-      invalidateAssetUsage(sessionId);
-      publishAttachmentRemoval(sessionId);
-      return { retained: 0, deleted: true };
+    if (
+      deleteEmpty &&
+      retainedCalls.length === 0 &&
+      entry.queue === settled &&
+      lifecycleFor(sessionId).direct.size === 0 &&
+      !opening.has(sessionId) &&
+      !reconciling.has(sessionId)
+    ) {
+      const lifecycle = markSessionDeleting(sessionId);
+      // Let a concurrent explicit delete join this exact in-queue retirement instead of starting
+      // a second transaction. `rewrite` is already the serialization owner for this session.
+      lifecycle.deletePromise = rewrite;
+      try {
+        const tombstone = await moveSessionToTombstone(sessionId);
+        if (open.get(sessionId) === entry) open.delete(sessionId);
+        lifecycle.state = 'deleted';
+        invalidateAssetUsage(sessionId);
+        publishAttachmentRemoval(sessionId);
+        await cleanupSessionTombstone(sessionId, tombstone);
+        return { retained: 0, deleted: true };
+      } catch (error) {
+        restoreSessionAfterFailedDelete(sessionId, lifecycle);
+        throw error;
+      } finally {
+        if (lifecycle.deletePromise === rewrite) lifecycle.deletePromise = null;
+      }
     }
     const kept: SessionEvent[] = [start, ...retainedCalls.map((event, index) => ({ ...event, seq: index + 2 }))];
 
@@ -1790,6 +2039,7 @@ async function readMeta(id: string): Promise<SessionSummary | null> {
  * full recovery path. No guessed summary is allowed to suppress crash reconciliation.
  */
 async function readCatalogSummary(id: string): Promise<SessionSummary | null> {
+  if (!sessionIsActive(id)) return null;
   const dir = sessionDir(id);
   try {
     const metadata = await fs.stat(path.join(dir, 'meta.json'));
@@ -1922,7 +2172,7 @@ async function ensureAttachmentCatalog(): Promise<AttachmentCatalog> {
         const summaries = await Promise.all(
           candidates.slice(offset, offset + ATTACHMENT_CATALOG_READ_CONCURRENCY).map(async (name) => {
             const live = open.get(name);
-            return live?.summary ?? await readCatalogSummary(name).catch(() => null);
+            return sessionIsActive(name) ? live?.summary ?? await readCatalogSummary(name).catch(() => null) : null;
           })
         );
         for (const summary of summaries) if (summary) indexSummary(catalog, summary);
@@ -1965,7 +2215,7 @@ async function readAllSummaries(): Promise<SessionSummary[]> {
     logWarn(`session store: more than ${MAX_SCANNED_SESSIONS} session folders; older ones were not scanned`);
   for (let offset = 0; offset < Math.min(candidates.length, MAX_SCANNED_SESSIONS); offset += ATTACHMENT_CATALOG_READ_CONCURRENCY) {
     const rows = await Promise.all(candidates.slice(offset, Math.min(offset + ATTACHMENT_CATALOG_READ_CONCURRENCY, MAX_SCANNED_SESSIONS))
-      .map(async name => open.get(name)?.summary ?? await readMeta(name)));
+      .map(async name => sessionIsActive(name) ? open.get(name)?.summary ?? await readMeta(name) : null));
     for (const summary of rows) if (summary) summaries.push({ ...summary });
   }
   summaries.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1984,9 +2234,9 @@ async function readAllSummaries(): Promise<SessionSummary[]> {
 async function readEverySummary(): Promise<SessionSummary[]> {
   const catalog = await ensureAttachmentCatalog();
   const summaries = new Map<string, SessionSummary>();
-  for (const summary of catalog.summaries.values()) summaries.set(summary.id, summary);
+  for (const summary of catalog.summaries.values()) if (sessionIsActive(summary.id)) summaries.set(summary.id, summary);
   // Live projections are authoritative between debounced meta writes.
-  for (const entry of open.values()) summaries.set(entry.summary.id, entry.summary);
+  for (const entry of open.values()) if (sessionIsActive(entry.summary.id)) summaries.set(entry.summary.id, entry.summary);
   return [...summaries.values()].map((summary) => ({ ...summary })).sort(compareSummariesNewestFirst);
 }
 
@@ -2026,12 +2276,13 @@ export async function listSessionPage(options: {
 } = {}): Promise<SessionPage> {
   const catalog = await ensureAttachmentCatalog();
   const limit = Math.max(1, Math.min(MAX_LISTED_SESSIONS, Math.floor(options.limit ?? MAX_LISTED_SESSIONS)));
-  const openIds = new Set(open.keys());
+  const openIds = new Set([...open.keys()].filter(sessionIsActive));
   const candidates: SessionSummary[] = [];
 
   // Open summaries are authoritative between debounced metadata writes. There are normally one
   // or a handful, so overlay them explicitly instead of rebuilding/sorting every retained row.
   for (const entry of open.values()) {
+    if (!sessionIsActive(entry.summary.id)) continue;
     if (entry.summary.origin?.kind === 'helper') continue;
     if (options.cursor && !comesAfterCursor(entry.summary, options.cursor)) continue;
     candidates.push({ ...entry.summary, chatIds: [...entry.summary.chatIds], agents: [...entry.summary.agents] });
@@ -2043,6 +2294,7 @@ export async function listSessionPage(options: {
   let durableEligible = 0;
   let durableHasMore = false;
   for (const id of catalog.orderedIds) {
+    if (!sessionIsActive(id)) continue;
     if (openIds.has(id)) continue;
     const summary = catalog.summaries.get(id);
     if (!summary || summary.origin?.kind === 'helper' || (options.cursor && !comesAfterCursor(summary, options.cursor))) continue;
@@ -2061,9 +2313,9 @@ export async function listSessionPage(options: {
   const nextCursor = hasMore && last ? { updatedAt: last.updatedAt, id: last.id } : null;
   let total = 0;
   for (const summary of catalog.summaries.values()) {
-    if (!openIds.has(summary.id) && summary.origin?.kind !== 'helper') total += 1;
+    if (sessionIsActive(summary.id) && !openIds.has(summary.id) && summary.origin?.kind !== 'helper') total += 1;
   }
-  for (const entry of open.values()) if (entry.summary.origin?.kind !== 'helper') total += 1;
+  for (const entry of open.values()) if (sessionIsActive(entry.summary.id) && entry.summary.origin?.kind !== 'helper') total += 1;
   return { sessions, total, nextCursor };
 }
 
@@ -2111,7 +2363,7 @@ export async function findSessionByConversation(
   // first session's initial files are still being written. Rebinds never expose B here early:
   // they mutate the live summary only after durable meta says B.
   for (const [id, entry] of open) {
-    if (entry.summary.conversationId === conversationId) currentIds.add(id);
+    if (sessionIsActive(id) && entry.summary.conversationId === conversationId) currentIds.add(id);
   }
   const current = (
     await Promise.all(
@@ -2131,13 +2383,22 @@ export async function findSessionByConversation(
     // callers (orphan retirement) opt into requireUnique above.
     return current[0] ?? null;
   }
+  const deletionPending = [...currentIds].some((id) => sessionLifecycles.get(id)?.state === 'deleting') ||
+    [...sessionLifecycles.values()].some((lifecycle) =>
+      lifecycle.state === 'deleting' &&
+      (!lifecycle.deletingLineageReady || lifecycle.deletingChatIds.includes(conversationId))
+    );
   if (options.includeHistorical !== true) {
+    // A deleting current owner is not proof of absence. Recorder creation waits for that delete
+    // transaction to settle and then retries this lookup; caching a miss here would let a failed
+    // tombstone rename fork a duplicate session.
+    if (deletionPending) return null;
     rememberMissingCurrentConversation(conversationId);
     return null;
   }
   const historicalIds = new Set(catalog.historical.get(conversationId) ?? []);
   for (const [id, entry] of open) {
-    if (entry.summary.chatIds.includes(conversationId)) historicalIds.add(id);
+    if (sessionIsActive(id) && entry.summary.chatIds.includes(conversationId)) historicalIds.add(id);
   }
   const historical = (
     await Promise.all(
@@ -2154,6 +2415,35 @@ export async function findSessionByConversation(
 }
 
 /**
+ * Joins only an already-started delete that currently owns this conversation.
+ *
+ * Generic catalog reads never wait on deletion because store queues can depend on those reads.
+ * Session creation is different: it must not manufacture a replacement until the old canonical
+ * owner either committed deletion or rolled back. The caller retries ownership after settlement.
+ */
+export function waitForConversationDeletionSettlement(conversationId: string): Promise<void> | null {
+  if (!conversationId) return null;
+  const ids = new Set<string>();
+  for (const id of attachmentCatalog?.current.get(conversationId) ?? []) ids.add(id);
+  for (const [id, entry] of open) {
+    if (entry.summary.conversationId === conversationId) ids.add(id);
+  }
+  for (const [id, lifecycle] of sessionLifecycles) {
+    if (lifecycle.state !== 'deleting') continue;
+    // A cold delete fences mutation before it can read durable metadata. Until that lineage read
+    // completes, no new conversation session may be created: we do not yet know whether this chat
+    // belongs to the retiring session. Once the lineage is known, only matching current/historical
+    // chats join the delete transaction.
+    if (!lifecycle.deletingLineageReady || lifecycle.deletingChatIds.includes(conversationId)) ids.add(id);
+  }
+  const pending = [...ids]
+    .map((id) => sessionLifecycles.get(id)?.deletePromise ?? null)
+    .filter((work): work is Promise<unknown> => Boolean(work));
+  if (pending.length === 0) return null;
+  return Promise.allSettled(pending).then(() => undefined);
+}
+
+/**
  * Has this ChatGPT conversation already been replaced inside any durable session lineage?
  *
  * This is intentionally independent of current attachment. Opening an old source chat after
@@ -2167,9 +2457,10 @@ export async function conversationWasSuperseded(conversationId: string): Promise
   const catalog = await ensureAttachmentCatalog();
   const sessionIds = new Set(catalog.historical.get(conversationId) ?? []);
   for (const [id, entry] of open) {
-    if (entry.summary.chatIds.includes(conversationId)) sessionIds.add(id);
+    if (sessionIsActive(id) && entry.summary.chatIds.includes(conversationId)) sessionIds.add(id);
   }
   for (const id of sessionIds) {
+    if (!sessionIsActive(id)) continue;
     const summary = open.get(id)?.summary ?? catalog.summaries.get(id) ?? null;
     if (summary?.chatIds.includes(conversationId) && summary.conversationId !== conversationId) return true;
   }
@@ -2231,6 +2522,9 @@ export async function getSession(id: string): Promise<SessionSummary | null> {
 /** Positive absence for retiring an exact delivered receipt, never corrupt metadata. */
 export async function sessionDirectoryMissing(id: string): Promise<boolean> {
   assertSessionId(id);
+  const lifecycle = sessionLifecycles.get(id);
+  if (lifecycle?.state === 'deleting') return false;
+  if (lifecycle?.state === 'deleted') return true;
   const dir = sessionDir(id);
   if (open.has(id) || opening.has(id)) return false;
   try {
@@ -2531,6 +2825,7 @@ export async function writeAsset(
   mimeType: string
 ): Promise<AssetRef> {
   assertSessionId(sessionId);
+  assertSessionActive(sessionId);
   if (data.length === 0 || data.length > MAX_ASSET_BYTES) throw new Error('Session asset exceeds the per-asset limit');
   const hash = createHash('sha256').update(data).digest('hex').slice(0, 32);
   const extension =
@@ -2542,7 +2837,10 @@ export async function writeAsset(
           ? '.txt'
           : '.bin';
   const id = `${hash}${extension}`;
-  const write = assetWriteQueue.then(async () => {
+  // Capture the predecessor before publishing this write as the new global tail. Reading the
+  // mutable `assetWriteQueue` inside the deferred action would make the write wait on itself.
+  const priorAssetWrite = assetWriteQueue;
+  const write = runDirectSessionWork(sessionId, () => priorAssetWrite.then(async () => {
     const dir = path.join(sessionDir(sessionId), 'assets');
     await fs.mkdir(dir, { recursive: true });
     const target = path.join(dir, id);
@@ -2564,7 +2862,7 @@ export async function writeAsset(
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
     return { id, mimeType, bytes: data.length };
-  });
+  }));
   assetWriteQueue = write.then(
     () => undefined,
     () => undefined
@@ -2681,12 +2979,14 @@ export async function readOverflowText(sessionId: string, assetId: string): Prom
 
 export async function saveHandoff(handoff: Handoff): Promise<void> {
   assertSessionId(handoff.sessionId);
-  const dir = path.join(sessionDir(handoff.sessionId), 'handoffs');
-  await fs.mkdir(dir, { recursive: true });
-  const target = path.join(dir, `${handoff.id}.json`);
-  const tmp = `${target}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(handoff, null, 2), 'utf8');
-  await fs.rename(tmp, target);
+  await runDirectSessionWork(handoff.sessionId, async () => {
+    const dir = path.join(sessionDir(handoff.sessionId), 'handoffs');
+    await fs.mkdir(dir, { recursive: true });
+    const target = path.join(dir, `${handoff.id}.json`);
+    const tmp = `${target}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(handoff, null, 2), 'utf8');
+    await fs.rename(tmp, target);
+  });
 }
 
 export async function readHandoff(sessionId: string, handoffId: string): Promise<Handoff | null> {
@@ -2721,6 +3021,137 @@ export async function latestHandoff(): Promise<Handoff | null> {
 
 // ------------------------------------------------------------------ prune
 
+async function moveSessionToTombstone(id: string): Promise<string | null> {
+  const source = sessionDir(id);
+  const tombstone = path.join(root, `.deleted-${id}-${randomUUID()}`);
+  try {
+    await fs.rename(source, tombstone);
+    return tombstone;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function cleanupSessionTombstone(id: string, tombstone: string | null): Promise<void> {
+  if (!tombstone) return;
+  try {
+    await fs.rm(tombstone, { recursive: true, force: true });
+  } catch (error) {
+    // The semantic delete committed at the same-directory rename. A cleanup failure can leave
+    // bytes under an ignored tombstone name, but must never resurrect the canonical session.
+    logWarn(`session ${id}: could not clean deletion tombstone: ${(error as Error).message}`);
+  }
+}
+
+function markSessionDeleting(id: string): SessionLifecycle {
+  const lifecycle = assertSessionActive(id);
+  const summary = open.get(id)?.summary ?? attachmentCatalog?.summaries.get(id) ?? null;
+  lifecycle.deletingChatIds = summary
+    ? [...new Set([...(summary.chatIds ?? []), ...(summary.conversationId ? [summary.conversationId] : [])])]
+    : [];
+  lifecycle.deletingLineageReady = summary !== null;
+  lifecycle.state = 'deleting';
+  lifecycle.generation += 1;
+  // Any catalog build that started before this point must retry and observe the lifecycle fence.
+  attachmentEpoch += 1;
+  const entry = open.get(id);
+  if (entry?.metaTimer) {
+    clearTimeout(entry.metaTimer);
+    entry.metaTimer = null;
+  }
+  return lifecycle;
+}
+
+function restoreSessionAfterFailedDelete(id: string, lifecycle: SessionLifecycle): void {
+  lifecycle.state = 'active';
+  // Invalidate a catalog build that may have omitted the row while deletion was in progress.
+  attachmentEpoch += 1;
+  // Lookups performed while an unresolved cold delete was loading lineage can conservatively see
+  // any conversation as absent. A failed delete means none of those negative answers are durable;
+  // clear this small process-local cache rather than risk letting one stale miss mint a duplicate.
+  missingCurrentConversations.clear();
+  // A create/open racing the failed delete may have durably written metadata while publication was
+  // fenced, or a lookup may have observed the deleting row as absent. Force the next authority
+  // lookup to rebuild from canonical metadata instead of trusting that derived snapshot.
+  attachmentCatalog = null;
+  const entry = open.get(id);
+  if (entry?.metaDirty) scheduleMeta(entry);
+  lifecycle.deletingChatIds = [];
+  lifecycle.deletingLineageReady = true;
+}
+
+async function loadColdDeletionLineage(id: string, lifecycle: SessionLifecycle): Promise<void> {
+  if (lifecycle.deletingLineageReady) return;
+  // `readMeta()` intentionally does not consult lifecycle state. A cold delete has already fenced
+  // new mutation before this await; this read exists only to retain the durable conversation
+  // lineage while the canonical directory is being retired. If metadata is unavailable, leave the
+  // lineage unresolved so recorder creation conservatively waits for the whole delete transaction.
+  const summary = await readMeta(id);
+  if (!summary) return;
+  lifecycle.deletingChatIds = [
+    ...new Set([...(summary.chatIds ?? []), ...(summary.conversationId ? [summary.conversationId] : [])])
+  ];
+  lifecycle.deletingLineageReady = true;
+}
+
+async function performSessionDeletion(id: string, lifecycle: SessionLifecycle): Promise<void> {
+  try {
+    await loadColdDeletionLineage(id, lifecycle);
+    // Work admitted before the lifecycle flip is allowed to finish; work admitted afterwards is
+    // rejected by ensureOpen/enqueue/direct-write admission. Drain every pre-existing writer
+    // before moving the canonical directory out of reach.
+    const inFlight = [
+      opening.get(id),
+      reconciling.get(id),
+      ...lifecycle.direct
+    ].filter((work): work is Promise<unknown> => Boolean(work));
+    if (inFlight.length > 0) await Promise.allSettled(inFlight);
+
+    const entry = open.get(id);
+    if (entry?.metaTimer) {
+      clearTimeout(entry.metaTimer);
+      entry.metaTimer = null;
+    }
+    await entry?.queue.catch(() => undefined);
+
+    const tombstone = await moveSessionToTombstone(id);
+    if (open.get(id) === entry) open.delete(id);
+    lifecycle.state = 'deleted';
+    lifecycle.deletingChatIds = [];
+    lifecycle.deletingLineageReady = true;
+    invalidateAssetUsage(id);
+    publishAttachmentRemoval(id);
+    await cleanupSessionTombstone(id, tombstone);
+  } catch (error) {
+    // rename is the commit point. If it failed, the canonical directory was never partially
+    // removed by us, so returning to active is safe. Recursive cleanup only happens afterwards.
+    restoreSessionAfterFailedDelete(id, lifecycle);
+    throw error;
+  }
+}
+
+function startSessionDeletion(id: string, onlyIfIdle: boolean): Promise<void> | null {
+  assertSessionId(id);
+  const lifecycle = lifecycleFor(id);
+  if (lifecycle.state === 'deleted') return Promise.resolve();
+  if (lifecycle.deletePromise) return onlyIfIdle ? null : lifecycle.deletePromise.then(() => undefined);
+  if (lifecycle.state !== 'active') return null;
+  if (
+    onlyIfIdle &&
+    (open.has(id) || opening.has(id) || reconciling.has(id) || lifecycle.direct.size > 0)
+  ) return null;
+
+  markSessionDeleting(id);
+  const work = performSessionDeletion(id, lifecycle);
+  lifecycle.deletePromise = work;
+  void work.then(
+    () => { if (lifecycle.deletePromise === work) lifecycle.deletePromise = null; },
+    () => { if (lifecycle.deletePromise === work) lifecycle.deletePromise = null; }
+  );
+  return work;
+}
+
 /**
  * Deletes sessions older than the retention window.
  *
@@ -2738,12 +3169,11 @@ export async function pruneSessions(retainDays: number): Promise<number> {
   let removed = 0;
   for (const summary of sessions) {
     if (summary.updatedAt >= cutoff) continue;
-    if (open.has(summary.id)) continue;
     if (newestHandoff && newestHandoff.sessionId === summary.id) continue;
+    const deletion = startSessionDeletion(summary.id, true);
+    if (!deletion) continue;
     try {
-      await fs.rm(sessionDir(summary.id), { recursive: true, force: true });
-      invalidateAssetUsage(summary.id);
-      publishAttachmentRemoval(summary.id);
+      await deletion;
       removed++;
     } catch (err) {
       logWarn(`could not remove old session ${summary.id}: ${(err as Error).message}`);
@@ -2752,17 +3182,9 @@ export async function pruneSessions(retainDays: number): Promise<number> {
   return removed;
 }
 
-export async function deleteSession(id: string): Promise<void> {
-  assertSessionId(id);
-  const entry = open.get(id);
-  if (entry) {
-    if (entry.metaTimer) clearTimeout(entry.metaTimer);
-    await entry.queue.catch(() => undefined);
-    open.delete(id);
-  }
-  await fs.rm(sessionDir(id), { recursive: true, force: true });
-  invalidateAssetUsage(id);
-  publishAttachmentRemoval(id);
+export function deleteSession(id: string): Promise<void> {
+  const deletion = startSessionDeletion(id, false);
+  return deletion ?? Promise.reject(new Error(`Session ${id} is already being retired`));
 }
 
 /** Test seam: forgets in-memory state without touching the files. */
@@ -2771,6 +3193,7 @@ export function resetSessionStoreForTests(): void {
   open.clear();
   opening.clear();
   reconciling.clear();
+  sessionLifecycles.clear();
   sessionAssetUsage.clear();
   globalAssetUsage = null;
   missingCurrentConversations.clear();
@@ -2782,6 +3205,7 @@ export function resetSessionStoreForTests(): void {
 /** Test seam: puts the store back to never having been told where to write. */
 export function unsetSessionRootForTests(): void {
   root = '';
+  sessionLifecycles.clear();
   sessionAssetUsage.clear();
   globalAssetUsage = null;
   missingCurrentConversations.clear();

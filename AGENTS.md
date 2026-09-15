@@ -21,7 +21,7 @@ changed lines before applying an older patch. Document the work and its actual v
 the code currently does it. Known implementation gaps are collected in §21 instead of being
 mixed into the happy path as features.
 
-Source alignment: **2026-09-14**, including current working-tree changes. App/extension **2.2.0**,
+Source alignment: **2026-09-15**, including current working-tree changes. App/extension **2.2.0**,
 bridge protocol **14** in the checked declarations (`package.json`, `src/main/version.ts`,
 `extension/manifest.json`). This does not prove release, installation or live Chrome behavior.
 
@@ -245,7 +245,7 @@ Paths in this section are repository-relative. Most mechanisms have `main`, `sha
 | Permissions and settings | `config.ts` / `config.json` | Validate every load/save; enforce effective current capabilities at use. |
 | Credentials | `secrets.ts` / encrypted `secrets.bin`; plugin OAuth's encrypted installation store | Main process only; publish updated cache after the encrypted write. |
 | Session/current chat/project | `store.ts` / `sessions/<id>/meta.json` | Rebind is the semantic A→B commit. |
-| Exact request ownership | `correlation.ts` / `state/request-correlations.json` plus recorded proof | First exact proof wins; retain local session epoch; reconcile from history on startup. |
+| Exact request ownership | `correlation.ts` / append-only `state/request-owners.jsonl`; legacy `request-correlations.json` is migration fallback only | First exact proof wins after durable admission; retain local session epoch; reconcile downgrade-era history incrementally on startup. |
 | Authored message | `store.ts` / canonical message shard | Replace by stable identity, preserving origin chronology. |
 | Agent progress plan | `store.ts::updateSessionPlan` / `sessions/<id>/plan.json` | Exact caller/session and invocation ordering; atomically replace the whole plan. |
 | Input and checkpoints | `input.ts` / `state/session-input.json` | Serialized acceptance, frozen payload, exclusive claim and receipt; stages belong here. |
@@ -438,10 +438,13 @@ native conversation id as the route/server identity materializes. A `WEB:` local
 historical Fiber object, conflicting durable ids, active tab, timing, tool name, arrival order
 or “only generating chat” is never a replacement proof.
 
-`correlation.ts` keeps the first exact request owner and its **local session epoch**. Conflicting
-claims do not overwrite it. Proof has no time TTL but the index is bounded to 50,000 recently
-observed request ids; recorded exact calls reconcile the index on startup even when a snapshot
-already exists. Late proof can repair Unattributed history only to the proved historical owner.
+`correlation.ts` keeps the first exact request owner and its **local session epoch** permanently.
+Conflicting claims do not overwrite it. Authority is admitted through the append-only
+`request-owners.jsonl` journal before browser confirmation or waiter publication; only diagnostic
+message/tool context is bounded to 50,000 recent ids. The old `request-correlations.json` snapshot is
+strict migration fallback, while per-session byte watermarks incrementally reconcile retained exact
+tool history after restart or downgrade. Late proof can repair Unattributed history only to the
+proved historical owner.
 
 Unresolved requests with an id get the recorder's 20-second production evidence grace. A
 headerless call has no exact proof to await and lands Unattributed immediately. Evidence waits

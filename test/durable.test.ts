@@ -4,9 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  appendDurableJournal,
+  durableJournalExists,
   flushDurable,
   initDurableStore,
   readDurable,
+  readDurableJournal,
   resetDurableForTests,
   writeDurableNow,
   writeDurableSoon,
@@ -29,6 +32,54 @@ async function tempStore(): Promise<string> {
 }
 
 describe('durable state commit boundary', () => {
+  it('requires initialized durable storage for security journal reads and appends', async () => {
+    await expect(readDurableJournal('owners')).rejects.toThrow('not initialized');
+    await expect(appendDurableJournal('owners', { id: 1 })).rejects.toThrow('not initialized');
+  });
+
+  it('distinguishes a missing journal from non-ENOENT read failures', async () => {
+    await tempStore();
+    await expect(durableJournalExists('owners')).resolves.toBe(false);
+    await expect(readDurableJournal('owners')).resolves.toEqual([]);
+    const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+    vi.spyOn(fs, 'readFile').mockRejectedValueOnce(denied);
+    await expect(readDurableJournal('owners')).rejects.toMatchObject({ code: 'EACCES' });
+  });
+
+  it('ignores only an unterminated crash tail and rejects malformed committed rows', async () => {
+    const dir = await tempStore();
+    const state = path.join(dir, 'state');
+    await fs.mkdir(state, { recursive: true });
+    const file = path.join(state, 'owners.jsonl');
+    await fs.writeFile(file, '{"ok":1}\n{"torn":', 'utf8');
+    await expect(readDurableJournal<{ ok: number }>('owners')).resolves.toEqual([{ ok: 1 }]);
+    await fs.writeFile(file, '{"ok":1}\nnot-json\n', 'utf8');
+    await expect(readDurableJournal('owners')).rejects.toThrow('malformed committed record');
+  });
+
+  it('discards an uncommitted torn tail before the next append', async () => {
+    const dir = await tempStore();
+    const state = path.join(dir, 'state');
+    await fs.mkdir(state, { recursive: true });
+    const file = path.join(state, 'owners.jsonl');
+    await fs.writeFile(file, '{"id":1}\n{"id":', 'utf8');
+    await appendDurableJournal('owners', { id: 2 });
+    await expect(readDurableJournal('owners')).resolves.toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it('rolls an ambiguous complete append failure back before another journal record can commit', async () => {
+    const dir = await tempStore();
+    const realAppend = fs.appendFile.bind(fs);
+    vi.spyOn(fs, 'appendFile').mockImplementationOnce(async (...args) => {
+      await realAppend(...args);
+      throw Object.assign(new Error('close failed after write'), { code: 'EIO' });
+    });
+    await expect(appendDurableJournal('owners', { id: 'a' })).rejects.toMatchObject({ code: 'EIO' });
+    await appendDurableJournal('owners', { id: 'b' });
+    await expect(readDurableJournal('owners')).resolves.toEqual([{ id: 'b' }]);
+    expect(await fs.readFile(path.join(dir, 'state', 'owners.jsonl'), 'utf8')).toBe('{"id":"b"}\n');
+  });
+
   it('starts independent pending files during flush without duplicating an active immediate write', async () => {
     await tempStore();
     let release!: () => void;
