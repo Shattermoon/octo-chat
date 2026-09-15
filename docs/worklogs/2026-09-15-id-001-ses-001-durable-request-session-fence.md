@@ -179,9 +179,11 @@ review heads were superseded by the recorder-final-identity harness correction, 
 CodeRabbit/adversarial production fixes, and the evidence updates above. Merge evidence must use the
 final pushed SHA; earlier review/CI runs are supporting history only.
 
-Before merge: at least two fresh independent exact-head reviewers with separate ID-001 and SES-001
-scopes plus one holistic regression/roadmap pass; CodeRabbit findings validated individually; hosted
-Windows x64 and Linux x64 CI green on the exact review SHA; stale formal reviews dismissed only after
-current-head evidence is complete. After merge, run a post-merge audit for bounded owner eviction,
-uncommitted `/correlations` ACK, stale migration precedence, session resurrection and deletion-path
-bypasses before advancing the serial remediation queue.
+Before merge: the sole repository maintainer performs an exact-final-SHA self-review covering the
+ownership, generation, side-effect, crash/revocation and restore invariants; substantive CodeRabbit
+findings are validated individually and resolved or explicitly dispositioned; hosted Windows x64 and
+Linux x64 CI must be green on the exact review SHA; and parallel AI review tracks are evidence inputs,
+not human approvals. Stale formal reviews are dismissed only after current-head evidence is complete.
+After merge, run a post-merge audit for bounded owner eviction, uncommitted `/correlations` ACK, stale
+migration precedence, session resurrection and deletion-path bypasses before advancing the serial
+remediation queue.
